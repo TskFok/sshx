@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAppStore, type ConnectionInfo } from "@/store";
+import { useAppStore, type ConnectionInfo, type SshClosePayload } from "@/store";
 import { cn } from "@/lib/utils";
 
 interface TerminalInstance {
@@ -47,6 +47,20 @@ const MAX_FONT_SIZE = 32;
 const ZOOM_KEYS = new Set(["=", "+", "-", "0"]);
 
 let tabIdCounter = 0;
+
+function writeRemoteClosedNotice(term: XTerminal, payload?: SshClosePayload | null): void {
+  const remote = !payload || payload.reason === "remote";
+  if (remote) {
+    term.write(
+      "\r\n\x1b[31m--- 连接已由服务端关闭（或网络中断）---\x1b[0m\r\n"
+    );
+    term.write(
+      "\x1b[90m若您未主动关闭标签，多为对端超时、踢线或链路问题。\x1b[0m\r\n"
+    );
+  } else {
+    term.write("\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n");
+  }
+}
 
 function generateSessionId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -145,16 +159,20 @@ export function TerminalPage() {
 
   const handleAuthSubmit = useCallback(async () => {
     if (!authPrompt) return;
+    if (authResponses.length !== authPrompt.prompts.length) {
+      return;
+    }
     try {
       await invoke("ssh_auth_respond", {
         sessionId: authPrompt.sessionId,
-        responses: authResponses,
+        responses: authResponses.map((s) => s.trim()),
       });
-    } catch {
-      // ssh_connect will handle the error
+      setAuthPrompt(null);
+      setAuthResponses([]);
+    } catch (e) {
+      // 失败时保持弹窗，否则后端会一直等 channel，最终超时
+      console.error("ssh_auth_respond failed", e);
     }
-    setAuthPrompt(null);
-    setAuthResponses([]);
   }, [authPrompt, authResponses]);
 
   const handleAuthCancel = useCallback(async () => {
@@ -205,14 +223,12 @@ export function TerminalPage() {
           }
         );
 
-        inst.unlistenClose = await listen(
+        inst.unlistenClose = await listen<SshClosePayload>(
           `ssh-close-${returnedId}`,
-          () => {
+          (event) => {
             inst.disconnected = true;
             inst.reconnecting = false;
-            inst.terminal.write(
-              "\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n"
-            );
+            writeRemoteClosedNotice(inst.terminal, event.payload);
             inst.terminal.write(
               "\x1b[33m按回车键重新连接...\x1b[0m\r\n"
             );
@@ -372,11 +388,11 @@ export function TerminalPage() {
             }
           );
 
-          inst.unlistenClose = await listen(
+          inst.unlistenClose = await listen<SshClosePayload>(
             `ssh-close-${returnedId}`,
-            () => {
+            (event) => {
               inst.disconnected = true;
-              term.write("\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n");
+              writeRemoteClosedNotice(term, event.payload);
               term.write("\x1b[33m按回车键重新连接...\x1b[0m\r\n");
               triggerUpdate();
             }

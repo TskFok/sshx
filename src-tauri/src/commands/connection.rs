@@ -9,7 +9,10 @@ pub fn list_connections(db: State<'_, Database>) -> Result<Vec<ConnectionInfo>, 
 }
 
 #[tauri::command]
-pub fn get_connection(db: State<'_, Database>, id: String) -> Result<Option<ConnectionInfo>, String> {
+pub fn get_connection(
+    db: State<'_, Database>,
+    id: String,
+) -> Result<Option<ConnectionInfo>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     db::connection::get_by_id(&conn, &id).map_err(|e| e.to_string())
 }
@@ -54,10 +57,7 @@ pub fn create_group(
 }
 
 #[tauri::command]
-pub fn update_group(
-    db: State<'_, Database>,
-    request: UpdateGroupRequest,
-) -> Result<(), String> {
+pub fn update_group(db: State<'_, Database>, request: UpdateGroupRequest) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     db::group::update(&conn, &request).map_err(|e| e.to_string())
 }

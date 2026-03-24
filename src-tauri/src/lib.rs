@@ -1,10 +1,11 @@
 mod commands;
 mod crypto;
 mod db;
+mod diagnostic;
 mod models;
 mod ssh;
 
-use commands::{connection, settings, ssh as ssh_commands};
+use commands::{connection, diagnostic as diagnostic_commands, settings, ssh as ssh_commands};
 use ssh::manager::SessionManager;
 use ssh::prompt::AuthPromptManager;
 
@@ -15,6 +16,8 @@ pub fn run() {
         .manage(SessionManager::new())
         .manage(AuthPromptManager::new())
         .invoke_handler(tauri::generate_handler![
+            diagnostic_commands::diagnostic_logs_get,
+            diagnostic_commands::diagnostic_logs_clear,
             connection::list_connections,
             connection::get_connection,
             connection::create_connection,
@@ -36,6 +39,7 @@ pub fn run() {
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
+            diagnostic::init(&app_handle, 2500);
             db::init_database(&app_handle)?;
             Ok(())
         })

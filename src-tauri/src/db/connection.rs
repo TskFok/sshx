@@ -13,7 +13,8 @@ fn now_timestamp() -> i64 {
 pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, auth_type, password, private_key, \
-         private_key_passphrase, group_id, created_at, updated_at \
+         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
+         created_at, updated_at \
          FROM connections ORDER BY updated_at DESC",
     )?;
 
@@ -29,8 +30,10 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
             private_key: row.get(7)?,
             private_key_passphrase: row.get(8)?,
             group_id: row.get(9)?,
-            created_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            keepalive_interval_secs: row.get::<_, i64>(10)? as u32,
+            keepalive_max: row.get::<_, i64>(11)? as u32,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
         })
     })?;
 
@@ -40,7 +43,8 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
 pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, auth_type, password, private_key, \
-         private_key_passphrase, group_id, created_at, updated_at \
+         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
+         created_at, updated_at \
          FROM connections WHERE id = ?1",
     )?;
 
@@ -56,8 +60,10 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, 
             private_key: row.get(7)?,
             private_key_passphrase: row.get(8)?,
             group_id: row.get(9)?,
-            created_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            keepalive_interval_secs: row.get::<_, i64>(10)? as u32,
+            keepalive_max: row.get::<_, i64>(11)? as u32,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
         })
     })?;
 
@@ -76,8 +82,9 @@ pub fn create(
 
     conn.execute(
         "INSERT INTO connections (id, name, host, port, username, auth_type, password, \
-         private_key, private_key_passphrase, group_id, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
+         created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             id,
             req.name,
@@ -89,6 +96,8 @@ pub fn create(
             req.private_key,
             req.private_key_passphrase,
             req.group_id,
+            req.keepalive_interval_secs as i64,
+            req.keepalive_max as i64,
             now,
             now,
         ],
@@ -105,20 +114,20 @@ pub fn create(
         private_key: req.private_key.clone(),
         private_key_passphrase: req.private_key_passphrase.clone(),
         group_id: req.group_id.clone(),
+        keepalive_interval_secs: req.keepalive_interval_secs,
+        keepalive_max: req.keepalive_max,
         created_at: now,
         updated_at: now,
     })
 }
 
-pub fn update(
-    conn: &Connection,
-    req: &UpdateConnectionRequest,
-) -> Result<(), rusqlite::Error> {
+pub fn update(conn: &Connection, req: &UpdateConnectionRequest) -> Result<(), rusqlite::Error> {
     let now = now_timestamp();
     conn.execute(
         "UPDATE connections SET name = ?1, host = ?2, port = ?3, username = ?4, \
          auth_type = ?5, password = ?6, private_key = ?7, private_key_passphrase = ?8, \
-         group_id = ?9, updated_at = ?10 WHERE id = ?11",
+         group_id = ?9, keepalive_interval_secs = ?10, keepalive_max = ?11, updated_at = ?12 \
+         WHERE id = ?13",
         params![
             req.name,
             req.host,
@@ -129,6 +138,8 @@ pub fn update(
             req.private_key,
             req.private_key_passphrase,
             req.group_id,
+            req.keepalive_interval_secs as i64,
+            req.keepalive_max as i64,
             now,
             req.id,
         ],
@@ -159,6 +170,8 @@ mod tests {
             private_key: None,
             private_key_passphrase: None,
             group_id: None,
+            keepalive_interval_secs: 30,
+            keepalive_max: 3,
         };
 
         let created = create(&conn, &req).unwrap();
@@ -182,12 +195,16 @@ mod tests {
             private_key: Some("ssh-rsa AAAA...".to_string()),
             private_key_passphrase: None,
             group_id: None,
+            keepalive_interval_secs: 0,
+            keepalive_max: 5,
         };
 
         let created = create(&conn, &req).unwrap();
         let found = get_by_id(&conn, &created.id).unwrap().unwrap();
         assert_eq!(found.name, "my-server");
         assert_eq!(found.port, 2222);
+        assert_eq!(found.keepalive_interval_secs, 0);
+        assert_eq!(found.keepalive_max, 5);
     }
 
     #[test]
@@ -203,6 +220,8 @@ mod tests {
             private_key: None,
             private_key_passphrase: None,
             group_id: None,
+            keepalive_interval_secs: 30,
+            keepalive_max: 3,
         };
 
         let created = create(&conn, &req).unwrap();
@@ -217,12 +236,16 @@ mod tests {
             private_key: None,
             private_key_passphrase: None,
             group_id: None,
+            keepalive_interval_secs: 60,
+            keepalive_max: 6,
         };
 
         update(&conn, &update_req).unwrap();
         let found = get_by_id(&conn, &created.id).unwrap().unwrap();
         assert_eq!(found.name, "new-name");
         assert_eq!(found.host, "5.6.7.8");
+        assert_eq!(found.keepalive_interval_secs, 60);
+        assert_eq!(found.keepalive_max, 6);
     }
 
     #[test]
@@ -238,6 +261,8 @@ mod tests {
             private_key: None,
             private_key_passphrase: None,
             group_id: None,
+            keepalive_interval_secs: 30,
+            keepalive_max: 3,
         };
 
         let created = create(&conn, &req).unwrap();

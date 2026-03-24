@@ -24,10 +24,16 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 aes-gcm = "0.10"
 argon2 = "0.5"
 uuid = { version = "1", features = ["v4"] }
-log = "0.4"
+log = { version = "0.4", features = ["std"] }
 thiserror = "2"
 async-trait = "0.1"
 ssh-key = "0.6"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# vendored russh 0.46 补丁：
+# - KI：`auth_request.current` 在公钥部分成功后的第二轮认证未设置；
+# - keepalive：对 `keepalive@openssh.com` 的 CHANNEL_SUCCESS 误填本地通道号，堡垒机会断开。
+[patch.crates-io]
+russh = { path = "../vendor/russh" }

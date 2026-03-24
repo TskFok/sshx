@@ -1,5 +1,5 @@
 use crate::models::AuthType;
-use russh_keys::key::KeyPair;
+use russh_keys::key::{KeyPair, SignatureHash};
 use std::path::Path;
 use thiserror::Error;
 
@@ -27,8 +27,8 @@ pub fn prepare_auth(
 ) -> Result<AuthMethod, AuthError> {
     match auth_type {
         AuthType::Password => {
-            let pwd = password
-                .ok_or_else(|| AuthError::Failed("password is required".to_string()))?;
+            let pwd =
+                password.ok_or_else(|| AuthError::Failed("password is required".to_string()))?;
             Ok(AuthMethod::Password(pwd.to_string()))
         }
         AuthType::Key => {
@@ -55,16 +55,25 @@ pub fn prepare_auth(
                 russh_keys::decode_secret_key(&key_content, None)
                     .map_err(|e| AuthError::InvalidKey(e.to_string()))?
             };
+            // OpenSSH 格式 RSA 在 russh-keys 中默认用 rsa-sha2-512；JumpServer 等仅接受 ssh-rsa（SHA1）
+            // 时需与系统 OpenSSH `PubkeyAcceptedAlgorithms=+ssh-rsa` 行为一致。
+            let key_pair = prefer_ssh_rsa_for_rsa_keypair(key_pair);
             Ok(AuthMethod::PublicKey(key_pair))
         }
     }
 }
 
+/// RSA 公钥认证时改用 `ssh-rsa`（SHA1）签名，以兼容仅启用旧版 RSA 签名的堡垒机/ssh 服务。
+fn prefer_ssh_rsa_for_rsa_keypair(key_pair: KeyPair) -> KeyPair {
+    match key_pair {
+        kp @ KeyPair::RSA { .. } => kp.with_signature_hash(SignatureHash::SHA1).unwrap_or(kp),
+        kp => kp,
+    }
+}
+
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
-        if let Some(home) = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-        {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             let home = home.to_string_lossy();
             return if path == "~" {
                 home.to_string()
@@ -93,6 +102,23 @@ impl russh::client::Handler for ClientHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh_keys::key::KeyPair;
+
+    #[test]
+    fn rsa_keypair_coerced_to_ssh_rsa_name() {
+        let kp = KeyPair::generate_rsa(1024, SignatureHash::SHA2_512).expect("generate rsa");
+        assert_eq!(kp.name(), "rsa-sha2-512");
+        let kp = prefer_ssh_rsa_for_rsa_keypair(kp);
+        assert_eq!(kp.name(), "ssh-rsa");
+    }
+
+    #[test]
+    fn ed25519_unchanged_by_rsa_coercion() {
+        let kp = KeyPair::generate_ed25519();
+        let name = kp.name();
+        let kp = prefer_ssh_rsa_for_rsa_keypair(kp);
+        assert_eq!(kp.name(), name);
+    }
 
     #[test]
     fn test_expand_tilde() {
@@ -109,12 +135,7 @@ mod tests {
 
     #[test]
     fn test_prepare_auth_password() {
-        let result = prepare_auth(
-            &AuthType::Password,
-            Some("mypassword"),
-            None,
-            None,
-        );
+        let result = prepare_auth(&AuthType::Password, Some("mypassword"), None, None);
         assert!(result.is_ok());
     }
 
@@ -132,12 +153,7 @@ mod tests {
 
     #[test]
     fn test_prepare_auth_key_nonexistent_file() {
-        let result = prepare_auth(
-            &AuthType::Key,
-            None,
-            Some("/nonexistent/path/to/key"),
-            None,
-        );
+        let result = prepare_auth(&AuthType::Key, None, Some("/nonexistent/path/to/key"), None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found"));

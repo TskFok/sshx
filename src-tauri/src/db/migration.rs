@@ -32,6 +32,27 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         ",
     )?;
+    migrate_v2_connection_keepalive(conn)?;
+    Ok(())
+}
+
+fn migrate_v2_connection_keepalive(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('connections') WHERE name = 'keepalive_interval_secs'",
+        [],
+        |r| r.get(0),
+    )?;
+    if n > 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE connections ADD COLUMN keepalive_interval_secs INTEGER NOT NULL DEFAULT 30",
+        [],
+    )?;
+    conn.execute(
+        "ALTER TABLE connections ADD COLUMN keepalive_max INTEGER NOT NULL DEFAULT 3",
+        [],
+    )?;
     Ok(())
 }
 
@@ -59,5 +80,19 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
+    }
+
+    #[test]
+    fn test_connections_has_keepalive_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('connections') WHERE name IN ('keepalive_interval_secs', 'keepalive_max')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2);
     }
 }

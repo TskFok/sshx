@@ -22,8 +22,7 @@ impl AuthPromptManager {
     pub async fn respond(&self, id: &str, responses: Vec<String>) -> Result<(), String> {
         let senders = self.senders.lock().await;
         if let Some(tx) = senders.get(id) {
-            tx.send(responses)
-                .map_err(|_| "认证会话已结束".to_string())
+            tx.send(responses).map_err(|_| "认证会话已结束".to_string())
         } else {
             Err("认证会话不存在".to_string())
         }

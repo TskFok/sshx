@@ -5,10 +5,27 @@ use russh::mac;
 use russh::{client, Preferred};
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
-pub fn build_client_config() -> Arc<client::Config> {
+/// `keepalive_interval_secs == 0` 时不发送客户端 keepalive（`keepalive_interval: None`）。
+/// `keepalive_max == 0` 时按 russh 语义不根据未应答次数断开（仅依赖 inactivity 等）。
+pub fn build_client_config(keepalive_interval_secs: u32, keepalive_max: u32) -> Arc<client::Config> {
+    let keepalive_interval = if keepalive_interval_secs > 0 {
+        Some(Duration::from_secs(u64::from(keepalive_interval_secs)))
+    } else {
+        None
+    };
+    let keepalive_max_usize = if keepalive_max > 0 {
+        keepalive_max as usize
+    } else {
+        0
+    };
+
     Arc::new(client::Config {
+        keepalive_interval,
+        keepalive_max: keepalive_max_usize,
         preferred: Preferred {
+            // 不包含 EXTENSION_OPENSSH_STRICT_KEX_*：部分 Go/crypto.ssh 堡垒机与严格 KEX 扩展不兼容
             kex: Cow::Borrowed(&[
                 kex::CURVE25519,
                 kex::CURVE25519_PRE_RFC_8731,
@@ -20,8 +37,6 @@ pub fn build_client_config() -> Arc<client::Config> {
                 kex::DH_G14_SHA1,
                 kex::DH_G1_SHA1,
                 kex::EXTENSION_SUPPORT_AS_CLIENT,
-                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
-                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
             ]),
             key: Cow::Borrowed(&[
                 key::ED25519,
@@ -61,10 +76,21 @@ mod tests {
 
     #[test]
     fn test_build_client_config() {
-        let config = build_client_config();
-        assert!(config.preferred.kex.len() >= 9);
+        let config = build_client_config(30, 3);
+        assert!(config.preferred.kex.len() >= 8);
         assert!(config.preferred.key.len() >= 6);
         assert!(config.preferred.cipher.len() >= 8);
         assert!(config.preferred.mac.len() >= 6);
+        assert_eq!(
+            config.keepalive_interval,
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(config.keepalive_max, 3);
+    }
+
+    #[test]
+    fn keepalive_zero_disables_interval() {
+        let c = build_client_config(0, 3);
+        assert!(c.keepalive_interval.is_none());
     }
 }

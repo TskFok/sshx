@@ -61,6 +61,8 @@ interface ConnectionFormData {
   privateKey: string;
   privateKeyPassphrase: string;
   groupId: string | null;
+  keepaliveIntervalSecs: number;
+  keepaliveMax: number;
 }
 
 const emptyForm: ConnectionFormData = {
@@ -73,6 +75,8 @@ const emptyForm: ConnectionFormData = {
   privateKey: "",
   privateKeyPassphrase: "",
   groupId: null,
+  keepaliveIntervalSecs: 30,
+  keepaliveMax: 3,
 };
 
 export function Connections() {
@@ -128,6 +132,8 @@ export function Connections() {
             privateKeyPassphrase:
               form.authType === "key" ? form.privateKeyPassphrase || null : null,
             groupId: form.groupId,
+            keepaliveIntervalSecs: form.keepaliveIntervalSecs,
+            keepaliveMax: form.keepaliveMax,
           },
         });
       } else {
@@ -143,6 +149,8 @@ export function Connections() {
             privateKeyPassphrase:
               form.authType === "key" ? form.privateKeyPassphrase || null : null,
             groupId: form.groupId,
+            keepaliveIntervalSecs: form.keepaliveIntervalSecs,
+            keepaliveMax: form.keepaliveMax,
           },
         });
       }
@@ -174,6 +182,8 @@ export function Connections() {
       privateKey: fullConn.privateKey ?? "",
       privateKeyPassphrase: "",
       groupId: fullConn.groupId,
+      keepaliveIntervalSecs: fullConn.keepaliveIntervalSecs ?? 30,
+      keepaliveMax: fullConn.keepaliveMax ?? 3,
     });
     setDialogOpen(true);
   };
@@ -205,6 +215,8 @@ export function Connections() {
           privateKey: form.authType === "key" ? form.privateKey : null,
           privateKeyPassphrase:
             form.authType === "key" ? form.privateKeyPassphrase || null : null,
+          keepaliveIntervalSecs: form.keepaliveIntervalSecs,
+          keepaliveMax: form.keepaliveMax,
         },
       });
       setTestResult({ ok: true, message: msg });
@@ -564,6 +576,50 @@ export function Connections() {
                 </div>
               </>
             )}
+            <div className="grid grid-cols-2 gap-4 border-t pt-4">
+              <div className="space-y-2">
+                <Label>Keepalive 间隔（秒）</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={86400}
+                  value={form.keepaliveIntervalSecs}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      keepaliveIntervalSecs: Math.max(
+                        0,
+                        Math.min(86400, parseInt(e.target.value, 10) || 0)
+                      ),
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  0 表示不发送客户端 keepalive；堡垒机建议 30～120
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Keepalive 容忍次数</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.keepaliveMax}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      keepaliveMax: Math.max(
+                        0,
+                        Math.min(100, parseInt(e.target.value, 10) || 0)
+                      ),
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  连续多少次无对端数据后断开；0 表示不按次数断开；常用 3
+                </p>
+              </div>
+            </div>
           </div>
           {testResult && (
             <div

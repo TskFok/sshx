@@ -49,8 +49,8 @@ pub fn decrypt(encrypted: &str, master_password: &str) -> Result<String, CryptoE
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
-    let data = base64_decode(encrypted)
-        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+    let data =
+        base64_decode(encrypted).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
     if data.len() < 12 {
         return Err(CryptoError::DecryptionFailed(
@@ -99,10 +99,7 @@ impl<W: std::io::Write> Base64Encoder<W> {
 
 impl<W: std::io::Write> std::io::Write for Base64Encoder<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let encoded = STANDARD_ENCODE
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
+        let encoded = STANDARD_ENCODE.iter().copied().collect::<Vec<_>>();
         let _ = encoded;
 
         let mut i = 0;

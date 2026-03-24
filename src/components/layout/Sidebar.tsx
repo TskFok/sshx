@@ -4,6 +4,7 @@ import {
   Server,
   Terminal,
   Settings,
+  ScrollText,
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react";
@@ -36,6 +37,11 @@ const navItems = [
     label: "设置",
     icon: Settings,
     path: "/settings",
+  },
+  {
+    label: "诊断日志",
+    icon: ScrollText,
+    path: "/diagnostics",
   },
 ];
 

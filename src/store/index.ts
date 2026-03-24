@@ -11,8 +11,17 @@ export interface ConnectionInfo {
   privateKey?: string | null;
   privateKeyPassphrase?: string | null;
   groupId: string | null;
+  /** 客户端 SSH keepalive 间隔（秒），0 表示关闭 */
+  keepaliveIntervalSecs: number;
+  /** 未收到对端数据时连续 keepalive 次数上限，达到后断开 */
+  keepaliveMax: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/** 与后端 `SshClosePayload` 一致 */
+export interface SshClosePayload {
+  reason: string;
 }
 
 export interface ConnectionGroup {

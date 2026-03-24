@@ -1,4 +1,6 @@
 use super::auth::ClientHandler;
+use crate::diagnostic::record_event;
+use crate::models::SshClosePayload;
 use russh::client::Handle;
 use russh::ChannelId;
 use tauri::{AppHandle, Emitter};
@@ -29,10 +31,11 @@ impl SshSession {
         app: AppHandle,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let channel = handle.channel_open_session().await?;
+        // want_reply: true — 等待服务端确认，部分堡垒机对无回复的 PTY/shell 请求会拒绝会话
         channel
-            .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
+            .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
-        channel.request_shell(false).await?;
+        channel.request_shell(true).await?;
 
         let channel_id = channel.id();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
@@ -54,23 +57,27 @@ impl SshSession {
                     }
                 }
 
-                match tokio::time::timeout(
-                    std::time::Duration::from_millis(5),
-                    ch.wait(),
-                )
-                .await
-                {
+                match tokio::time::timeout(std::time::Duration::from_millis(5), ch.wait()).await {
                     Ok(Some(russh::ChannelMsg::Data { ref data })) => {
                         let bytes: Vec<u8> = data.to_vec();
                         let _ = app.emit(&format!("ssh-data-{}", sid), bytes);
                     }
                     Ok(Some(russh::ChannelMsg::Eof)) | Ok(None) => {
-                        let _ = app.emit(&format!("ssh-close-{}", sid), ());
+                        record_event(
+                            Some(&app),
+                            "ssh_session",
+                            format!("SSH 通道结束 session_id={sid}（EOF 或对端关闭连接）"),
+                        );
+                        let _ = app.emit(
+                            &format!("ssh-close-{}", sid),
+                            SshClosePayload {
+                                reason: "remote".to_string(),
+                            },
+                        );
                         break;
                     }
                     Ok(Some(russh::ChannelMsg::ExitStatus { exit_status })) => {
-                        let _ =
-                            app.emit(&format!("ssh-exit-{}", sid), exit_status);
+                        let _ = app.emit(&format!("ssh-exit-{}", sid), exit_status);
                     }
                     Err(_) => {}
                     _ => {}

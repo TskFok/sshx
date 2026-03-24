@@ -3,6 +3,7 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Connections } from "@/pages/Connections";
 import { Settings } from "@/pages/Settings";
+import { Diagnostics } from "@/pages/Diagnostics";
 import { useAppStore } from "@/store";
 import { useEffect } from "react";
 
@@ -20,6 +21,7 @@ function App() {
         <Route path="/connections" element={<Connections />} />
         <Route path="/terminal" element={<></>} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/diagnostics" element={<Diagnostics />} />
       </Route>
     </Routes>
   );
