@@ -1,0 +1,44 @@
+mod commands;
+mod crypto;
+mod db;
+mod models;
+mod ssh;
+
+use commands::{connection, settings, ssh as ssh_commands};
+use ssh::manager::SessionManager;
+use ssh::prompt::AuthPromptManager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .manage(SessionManager::new())
+        .manage(AuthPromptManager::new())
+        .invoke_handler(tauri::generate_handler![
+            connection::list_connections,
+            connection::get_connection,
+            connection::create_connection,
+            connection::update_connection,
+            connection::delete_connection,
+            connection::list_groups,
+            connection::create_group,
+            connection::update_group,
+            connection::delete_group,
+            ssh_commands::ssh_connect,
+            ssh_commands::ssh_disconnect,
+            ssh_commands::ssh_write,
+            ssh_commands::ssh_resize,
+            ssh_commands::ssh_auth_respond,
+            ssh_commands::ssh_auth_cancel,
+            ssh_commands::test_connection,
+            settings::get_settings,
+            settings::update_settings,
+        ])
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+            db::init_database(&app_handle)?;
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
