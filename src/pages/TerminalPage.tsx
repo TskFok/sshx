@@ -73,6 +73,42 @@ function generateSessionId(): string {
   });
 }
 
+/** 连续 N 帧 requestAnimationFrame，便于布局提交后再 fit */
+function waitAnimationFrames(count: number): Promise<void> {
+  return new Promise((resolve) => {
+    let n = 0;
+    const step = () => {
+      n += 1;
+      if (n >= count) resolve();
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/**
+ * 在 ssh_connect 之前调用：当前容器 display:block、兄弟为 none，双 rAF 后 fit，
+ * 避免 display:none 下默认行列过小导致远端 PTY 尺寸错误。
+ */
+async function prepareTerminalDimensions(
+  wrapper: HTMLElement,
+  containerEl: HTMLElement,
+  fitAddon: FitAddon,
+  term: XTerminal
+): Promise<void> {
+  for (const child of wrapper.children) {
+    const el = child as HTMLElement;
+    el.style.display = el === containerEl ? "block" : "none";
+  }
+  await waitAnimationFrames(2);
+  fitAddon.fit();
+  const { cols, rows } = term;
+  if (cols < 20 || rows < 5) {
+    await waitAnimationFrames(1);
+    fitAddon.fit();
+  }
+}
+
 export function TerminalPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -204,6 +240,15 @@ export function TerminalPage() {
 
       try {
         unlistenPrompt = await setupAuthPromptListener(newSessionId);
+
+        if (wrapperRef.current) {
+          await prepareTerminalDimensions(
+            wrapperRef.current,
+            inst.containerEl,
+            inst.fitAddon,
+            inst.terminal
+          );
+        }
 
         const returnedId: string = await invoke("ssh_connect", {
           request: {
@@ -369,6 +414,13 @@ export function TerminalPage() {
         try {
           unlistenPrompt = await setupAuthPromptListener(sessionId);
 
+          await prepareTerminalDimensions(
+            wrapperRef.current,
+            containerEl,
+            fitAddon,
+            term
+          );
+
           const returnedId: string = await invoke("ssh_connect", {
             request: {
               connectionId,
@@ -454,6 +506,20 @@ export function TerminalPage() {
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, [activeTab, terminals, isVisible]);
+
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (!isVisible) return;
+      const active = terminals.find((t) => t.id === activeTab);
+      if (active) {
+        active.fitAddon.fit();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [activeTab, terminals, isVisible]);
 
   const closeTab = (tabId: string) => {
