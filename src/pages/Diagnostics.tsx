@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { Link } from "react-router-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,18 +44,26 @@ function levelClass(level: string): string {
   }
 }
 
+interface AppSettingsDiag {
+  diagnosticLoggingEnabled?: boolean;
+}
+
 export function Diagnostics() {
   const [entries, setEntries] = useState<DiagnosticLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [captureEnabled, setCaptureEnabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
   const loadLogs = useCallback(async () => {
     try {
+      const settings = await invoke<AppSettingsDiag>("get_settings");
+      setCaptureEnabled(settings.diagnosticLoggingEnabled ?? false);
       const rows = await invoke<DiagnosticLogEntry[]>("diagnostic_logs_get");
       setEntries(rows);
     } catch {
       setEntries([]);
+      setCaptureEnabled(false);
     } finally {
       setLoading(false);
     }
@@ -65,6 +74,7 @@ export function Diagnostics() {
   }, [loadLogs]);
 
   useEffect(() => {
+    if (!captureEnabled) return;
     let unlisten: UnlistenFn | undefined;
     listen<DiagnosticLogEntry>("diagnostic-log", (e) => {
       setEntries((prev) => {
@@ -80,7 +90,7 @@ export function Diagnostics() {
     return () => {
       unlisten?.();
     };
-  }, []);
+  }, [captureEnabled]);
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
@@ -119,8 +129,8 @@ export function Diagnostics() {
               <div>
                 <CardTitle>诊断日志</CardTitle>
                 <CardDescription className="mt-1">
-                  记录 SSH 连接、认证、keyboard-interactive 及本应用相关日志（不含密码内容）。
-                  复现问题时可复制全部后排查。
+                  需先在「设置」中开启「收集诊断日志」。开启后记录 SSH
+                  连接、认证、keyboard-interactive 及本应用相关日志（不含密码内容）。
                 </CardDescription>
               </div>
             </div>
@@ -148,12 +158,27 @@ export function Diagnostics() {
           </div>
         </CardHeader>
         <CardContent>
+          {!loading && !captureEnabled && (
+            <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100">
+              <p className="font-medium">诊断收集当前为关闭状态</p>
+              <p className="mt-1 text-amber-800/90 dark:text-amber-200/90">
+                未开启时不会写入日志。请前往{" "}
+                <Link
+                  to="/settings"
+                  className="underline font-medium text-amber-900 dark:text-amber-100"
+                >
+                  设置 → 诊断
+                </Link>{" "}
+                打开「收集诊断日志」并保存后，再返回此处刷新。
+              </p>
+            </div>
+          )}
           <ScrollArea className="h-[min(70vh,560px)] w-full rounded-md border bg-background">
             <div className="p-3 font-mono text-xs leading-relaxed">
               {loading && (
                 <p className="text-muted-foreground">正在加载…</p>
               )}
-              {!loading && entries.length === 0 && (
+              {!loading && captureEnabled && entries.length === 0 && (
                 <p className="text-muted-foreground">
                   暂无日志。请尝试发起一次 SSH 连接或「测试连接」。
                 </p>

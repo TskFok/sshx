@@ -120,6 +120,9 @@ pub struct AppSettings {
     pub font_family: String,
     pub theme: String,
     pub terminal_cursor_style: String,
+    /// 默认关闭：为 true 时收集诊断缓冲与 `log` 路由日志。
+    #[serde(default)]
+    pub diagnostic_logging_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -129,6 +132,7 @@ impl Default for AppSettings {
             font_family: "Menlo, Monaco, 'Courier New', monospace".to_string(),
             theme: "system".to_string(),
             terminal_cursor_style: "block".to_string(),
+            diagnostic_logging_enabled: false,
         }
     }
 }

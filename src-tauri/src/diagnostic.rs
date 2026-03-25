@@ -1,13 +1,15 @@
 use log::{Level, LevelFilter, Log, Metadata, Record};
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL: Mutex<Option<Arc<DiagnosticBuffer>>> = Mutex::new(None);
+/// 默认关闭：仅在为 true 时写入缓冲并转发 `diagnostic-log` 事件。
+static CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,8 +78,34 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// 是否正在收集诊断日志（供前端展示状态）。
+pub fn capture_enabled() -> bool {
+    CAPTURE_ENABLED.load(Ordering::SeqCst)
+}
+
+/// 运行时开关：关闭时会清空缓冲；开启时可顺带记一条事件。
+pub fn set_capture_enabled(on: bool, app: Option<&AppHandle>) {
+    CAPTURE_ENABLED.store(on, Ordering::SeqCst);
+    if !on {
+        buffer_clear();
+    } else if let Some(app) = app {
+        let msg = "诊断日志收集已开启".to_string();
+        if let Some(buf) = global_buffer() {
+            buf.push(
+                Level::Info,
+                "sshx.event.app",
+                msg,
+                Some(app),
+            );
+        }
+    }
+}
+
 /// 写入诊断缓冲（不经由 `log` 宏，避免与全局 Logger 循环）
 pub fn record_event(app: Option<&AppHandle>, category: &str, message: impl Into<String>) {
+    if !capture_enabled() {
+        return;
+    }
     let msg = message.into();
     if let Some(buf) = global_buffer() {
         buf.push(Level::Info, &format!("sshx.event.{category}"), msg, app);
@@ -88,7 +116,9 @@ fn global_buffer() -> Option<Arc<DiagnosticBuffer>> {
     GLOBAL.lock().ok().and_then(|g| g.as_ref().cloned())
 }
 
-pub fn init(app: &AppHandle, cap: usize) {
+pub fn init(app: &AppHandle, cap: usize, capture_on: bool) {
+    CAPTURE_ENABLED.store(capture_on, Ordering::SeqCst);
+
     let buffer = Arc::new(DiagnosticBuffer::new(cap));
     {
         let mut g = GLOBAL.lock().expect("diagnostic mutex poisoned");
@@ -112,7 +142,9 @@ pub fn init(app: &AppHandle, cap: usize) {
         }
     }
 
-    record_event(Some(app), "app", "诊断日志已初始化");
+    if capture_on {
+        record_event(Some(app), "app", "诊断日志已初始化（收集已开启）");
+    }
 }
 
 pub fn buffer_snapshot() -> Vec<DiagnosticLogEntry> {
@@ -136,6 +168,9 @@ impl Log for DiagnosticLogger {
     }
 
     fn log(&self, record: &Record) {
+        if !capture_enabled() {
+            return;
+        }
         if !self.enabled(record.metadata()) {
             return;
         }
@@ -162,6 +197,13 @@ fn should_capture(level: Level, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_event_skips_when_capture_disabled() {
+        CAPTURE_ENABLED.store(false, Ordering::SeqCst);
+        assert!(!capture_enabled());
+        record_event(None, "t", "ignored"); // 无全局 buffer 也应安全早退
+    }
 
     #[test]
     fn buffer_respects_cap() {

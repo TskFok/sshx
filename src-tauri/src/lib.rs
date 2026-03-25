@@ -6,8 +6,10 @@ mod models;
 mod ssh;
 
 use commands::{connection, diagnostic as diagnostic_commands, settings, ssh as ssh_commands};
+use db::Database;
 use ssh::manager::SessionManager;
 use ssh::prompt::AuthPromptManager;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,10 +39,19 @@ pub fn run() {
             settings::get_settings,
             settings::update_settings,
         ])
-        .setup(|app| {
+        .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
             let app_handle = app.handle().clone();
-            diagnostic::init(&app_handle, 2500);
             db::init_database(&app_handle)?;
+            let capture_on = {
+                let db = app.try_state::<Database>().ok_or_else(|| {
+                    Box::<dyn std::error::Error>::from("database not initialized")
+                })?;
+                let conn = db.0.lock().map_err(|e| {
+                    Box::<dyn std::error::Error>::from(e.to_string())
+                })?;
+                settings::read_diagnostic_logging_enabled(&conn)
+            };
+            diagnostic::init(&app_handle, 2500, capture_on);
             Ok(())
         })
         .run(tauri::generate_context!())

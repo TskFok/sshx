@@ -25,6 +25,7 @@ interface SettingsForm {
   fontFamily: string;
   theme: string;
   terminalCursorStyle: string;
+  diagnosticLoggingEnabled: boolean;
 }
 
 export function Settings() {
@@ -36,6 +37,7 @@ export function Settings() {
     fontFamily: "Menlo, Monaco, 'Courier New', monospace",
     theme: "system",
     terminalCursorStyle: "block",
+    diagnosticLoggingEnabled: false,
   });
   const [saved, setSaved] = useState(false);
 
@@ -49,6 +51,8 @@ export function Settings() {
             "Menlo, Monaco, 'Courier New', monospace",
           theme: settings.theme ?? "system",
           terminalCursorStyle: settings.terminalCursorStyle ?? "block",
+          diagnosticLoggingEnabled:
+            settings.diagnosticLoggingEnabled ?? false,
         });
       })
       .catch(() => {});
@@ -62,6 +66,7 @@ export function Settings() {
           fontFamily: form.fontFamily,
           theme: form.theme,
           terminalCursorStyle: form.terminalCursorStyle,
+          diagnosticLoggingEnabled: form.diagnosticLoggingEnabled,
         },
       });
 
@@ -204,6 +209,34 @@ export function Settings() {
                 setForm({ ...form, fontFamily: e.target.value })
               }
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>诊断</CardTitle>
+          <CardDescription>
+            默认关闭。仅在需要排查连接问题时开启；会占用少量内存并记录 sshx / russh 相关日志。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <input
+              id="diagnostic-logging"
+              type="checkbox"
+              className="h-4 w-4 rounded border-input"
+              checked={form.diagnosticLoggingEnabled}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  diagnosticLoggingEnabled: e.target.checked,
+                })
+              }
+            />
+            <Label htmlFor="diagnostic-logging" className="cursor-pointer font-normal">
+              收集诊断日志（关闭后已缓冲的日志会被清空）
+            </Label>
           </div>
         </CardContent>
       </Card>
