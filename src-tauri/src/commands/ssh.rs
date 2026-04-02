@@ -1,16 +1,30 @@
 use crate::db::Database;
 use crate::diagnostic::record_event;
 use crate::models::{SshConnectRequest, TestConnectionRequest};
-use crate::ssh::auth::{prepare_auth, AuthMethod, ClientHandler};
+use crate::ssh::auth::prepare_auth;
+#[cfg(not(target_os = "macos"))]
+use crate::ssh::auth::AuthMethod;
+#[cfg(not(target_os = "macos"))]
+use crate::ssh::auth::ClientHandler;
+#[cfg(not(target_os = "macos"))]
 use crate::ssh::keyboard_interactive::{
     try_auto_ki_empty_prompts_response, try_auto_ki_password_response,
 };
 use crate::ssh::manager::SessionManager;
-use crate::ssh::prompt::{AuthPromptManager, AuthPromptPayload, PromptItem};
+#[cfg(not(target_os = "macos"))]
+use crate::ssh::prompt::{AuthPromptPayload, PromptItem};
+use crate::ssh::prompt::AuthPromptManager;
+#[cfg(not(target_os = "macos"))]
 use crate::ssh::session::SshSession;
+#[cfg(not(target_os = "macos"))]
 use russh::client::{Handle, KeyboardInteractiveAuthResponse};
+#[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
+#[cfg(not(target_os = "macos"))]
 use tauri::{AppHandle, Emitter, State};
+#[cfg(target_os = "macos")]
+use tauri::{AppHandle, State};
+#[cfg(not(target_os = "macos"))]
 use tokio::sync::mpsc;
 
 #[tauri::command]
@@ -75,156 +89,202 @@ pub async fn ssh_connect(
         m
     })?;
 
-    let config = crate::ssh::config::build_client_config(
-        connection.keepalive_interval_secs,
-        connection.keepalive_max,
-    );
-    let handler = ClientHandler;
-
-    let mut handle = russh::client::connect(config, (&*connection.host, connection.port), handler)
+    #[cfg(target_os = "macos")]
+    {
+        record_event(
+            Some(&app),
+            "ssh_connect",
+            "使用系统 OpenSSH（/usr/bin/ssh）与 PTY 子进程",
+        );
+        let app_for_err = app.clone();
+        let session = crate::ssh::session::connect_openssh(
+            app,
+            &*auth_prompts,
+            &session_id,
+            request.connection_id.clone(),
+            &connection.host,
+            connection.port,
+            &connection.username,
+            &auth,
+            connection.private_key_passphrase.as_deref(),
+            request.cols,
+            request.rows,
+            connection.keepalive_interval_secs,
+            connection.keepalive_max,
+        )
         .await
         .map_err(|e| {
-            let msg = format!("无法连接到 {}:{} - {}", connection.host, connection.port, e);
-            record_event(Some(&app), "ssh_connect", format!("传输层失败: {msg}"));
-            msg
-        })?;
-    record_event(Some(&app), "ssh_connect", "SSH 传输层已建立，开始用户认证");
-
-    let password_for_ki = match &auth {
-        AuthMethod::Password(pwd) => Some(pwd.clone()),
-        _ => None,
-    };
-
-    let mut authenticated = false;
-
-    match auth {
-        AuthMethod::Password(pwd) => {
-            let r = handle
-                .authenticate_password(&connection.username, &pwd)
-                .await;
-            log::info!("ssh password auth: {:?}", r);
-            match r {
-                Ok(true) => authenticated = true,
-                Ok(false) => {}
-                Err(e) => log::warn!("password auth error (will try keyboard-interactive): {}", e),
-            }
-        }
-        AuthMethod::PublicKey(key) => {
-            let r = handle
-                .authenticate_publickey(&connection.username, Arc::new(key))
-                .await;
-            log::info!("ssh publickey auth: {:?}", r);
-            match r {
-                Ok(true) => authenticated = true,
-                Ok(false) => {}
-                Err(e) => log::warn!("pubkey auth error (will try keyboard-interactive): {}", e),
-            }
-        }
-    }
-
-    if !authenticated {
-        // JumpServer 等：公钥验证「部分成功」时 russh 仍返回 Ok(false)，且服务端仅剩
-        // keyboard-interactive。若再发第二套 rsa-sha2 公钥请求，Go/crypto.ssh 状态机会错乱，
-        // 导致 MFA 包已收到却不再向应用层交付（见 ~/Downloads/error.log 类日志）。
-        record_event(
-            Some(&app),
-            "ssh_connect",
-            "进入 keyboard-interactive；已禁用公钥第二算法重试以兼容堡垒机部分成功流程",
-        );
-        log::info!(
-            "ssh session {}: keyboard-interactive (e.g. MFA / JumpServer OTP)",
-            session_id
-        );
-        let mut auth_rx = auth_prompts.register(&session_id).await;
-
-        let ki_result = handle
-            .authenticate_keyboard_interactive_start(&connection.username, None)
-            .await
-            .map_err(|e| format!("keyboard-interactive 认证启动失败: {}", e))?;
-        log::info!("ssh keyboard-interactive start: {:?}", ki_result);
-
-        let ki_ok = handle_keyboard_interactive(
-            &mut handle,
-            &app,
-            &session_id,
-            &mut auth_rx,
-            ki_result,
-            password_for_ki.as_deref(),
-        )
-        .await;
-
-        auth_prompts.cancel(&session_id).await;
-
-        match ki_ok {
-            Ok(true) => authenticated = true,
-            Ok(false) => {
-                record_event(
-                    Some(&app),
-                    "ssh_connect",
-                    "keyboard-interactive 结束: 失败或被拒",
-                );
-                return Err("认证失败：二次验证被拒绝或未完成（keyboard-interactive）".to_string());
-            }
-            Err(e) => {
-                record_event(
-                    Some(&app),
-                    "ssh_connect",
-                    format!("keyboard-interactive 异常: {e}"),
-                );
-                return Err(e);
-            }
-        }
-    }
-
-    if !authenticated {
-        record_event(
-            Some(&app),
-            "ssh_connect",
-            "认证失败: 未获得 USERAUTH_SUCCESS",
-        );
-        return Err("认证失败：公钥或密码未通过，且未进入二次验证流程".to_string());
-    }
-
-    record_event(
-        Some(&app),
-        "ssh_connect",
-        "用户认证成功，正在请求 PTY 与 Shell",
-    );
-
-    let app_for_err = app.clone();
-    let session = SshSession::from_authenticated_handle(
-        session_id.clone(),
-        request.connection_id,
-        handle,
-        request.cols,
-        request.rows,
-        app,
-    )
-    .await
-    .map_err(|e| {
-        let msg = format!(
-            "SSH 认证已通过，但打开终端会话失败（PTY/Shell）: {}。若使用堡垒机，请确认账号允许交互式 Shell。",
+            record_event(
+                Some(&app_for_err),
+                "ssh_connect",
+                format!("OpenSSH 会话失败: {e}"),
+            );
             e
-        );
+        })?;
+
+        manager.add_session(session).await;
+
         record_event(
             Some(&app_for_err),
             "ssh_connect",
-            format!("打开会话失败: {e}"),
+            format!("会话已建立 session_id={session_id}"),
         );
-        msg
-    })?;
+        return Ok(session_id);
+    }
 
-    manager.add_session(session).await;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let config = crate::ssh::config::build_client_config(
+            connection.keepalive_interval_secs,
+            connection.keepalive_max,
+        );
+        let handler = ClientHandler;
 
-    record_event(
-        Some(&app_for_err),
-        "ssh_connect",
-        format!("会话已建立 session_id={session_id}"),
-    );
+        let mut handle = russh::client::connect(config, (&*connection.host, connection.port), handler)
+            .await
+            .map_err(|e| {
+                let msg = format!("无法连接到 {}:{} - {}", connection.host, connection.port, e);
+                record_event(Some(&app), "ssh_connect", format!("传输层失败: {msg}"));
+                msg
+            })?;
+        record_event(Some(&app), "ssh_connect", "SSH 传输层已建立，开始用户认证");
 
-    Ok(session_id)
+        let password_for_ki = match &auth {
+            AuthMethod::Password(pwd) => Some(pwd.clone()),
+            _ => None,
+        };
+
+        let mut authenticated = false;
+
+        match &auth {
+            AuthMethod::Password(pwd) => {
+                let r = handle
+                    .authenticate_password(&connection.username, pwd)
+                    .await;
+                log::info!("ssh password auth: {:?}", r);
+                match r {
+                    Ok(true) => authenticated = true,
+                    Ok(false) => {}
+                    Err(e) => log::warn!("password auth error (will try keyboard-interactive): {}", e),
+                }
+            }
+            AuthMethod::PublicKey(key) => {
+                let r = handle
+                    .authenticate_publickey(&connection.username, Arc::new(key.clone()))
+                    .await;
+                log::info!("ssh publickey auth: {:?}", r);
+                match r {
+                    Ok(true) => authenticated = true,
+                    Ok(false) => {}
+                    Err(e) => log::warn!("pubkey auth error (will try keyboard-interactive): {}", e),
+                }
+            }
+        }
+
+        if !authenticated {
+            record_event(
+                Some(&app),
+                "ssh_connect",
+                "进入 keyboard-interactive；已禁用公钥第二算法重试以兼容堡垒机部分成功流程",
+            );
+            log::info!(
+                "ssh session {}: keyboard-interactive (e.g. MFA / JumpServer OTP)",
+                session_id
+            );
+            let mut auth_rx = auth_prompts.register(&session_id).await;
+
+            let ki_result = handle
+                .authenticate_keyboard_interactive_start(&connection.username, None)
+                .await
+                .map_err(|e| format!("keyboard-interactive 认证启动失败: {}", e))?;
+            log::info!("ssh keyboard-interactive start: {:?}", ki_result);
+
+            let ki_ok = handle_keyboard_interactive(
+                &mut handle,
+                &app,
+                &session_id,
+                &mut auth_rx,
+                ki_result,
+                password_for_ki.as_deref(),
+            )
+            .await;
+
+            auth_prompts.cancel(&session_id).await;
+
+            match ki_ok {
+                Ok(true) => authenticated = true,
+                Ok(false) => {
+                    record_event(
+                        Some(&app),
+                        "ssh_connect",
+                        "keyboard-interactive 结束: 失败或被拒",
+                    );
+                    return Err(
+                        "认证失败：二次验证被拒绝或未完成（keyboard-interactive）".to_string(),
+                    );
+                }
+                Err(e) => {
+                    record_event(
+                        Some(&app),
+                        "ssh_connect",
+                        format!("keyboard-interactive 异常: {e}"),
+                    );
+                    return Err(e);
+                }
+            }
+        }
+
+        if !authenticated {
+            record_event(
+                Some(&app),
+                "ssh_connect",
+                "认证失败: 未获得 USERAUTH_SUCCESS",
+            );
+            return Err("认证失败：公钥或密码未通过，且未进入二次验证流程".to_string());
+        }
+
+        record_event(
+            Some(&app),
+            "ssh_connect",
+            "用户认证成功，正在请求 PTY 与 Shell",
+        );
+
+        let app_for_err = app.clone();
+        let session = SshSession::from_authenticated_handle(
+            session_id.clone(),
+            request.connection_id,
+            handle,
+            request.cols,
+            request.rows,
+            app,
+        )
+        .await
+        .map_err(|e| {
+            let msg = format!(
+                "SSH 认证已通过，但打开终端会话失败（PTY/Shell）: {}。若使用堡垒机，请确认账号允许交互式 Shell。",
+                e
+            );
+            record_event(
+                Some(&app_for_err),
+                "ssh_connect",
+                format!("打开会话失败: {e}"),
+            );
+            msg
+        })?;
+
+        manager.add_session(session).await;
+
+        record_event(
+            Some(&app_for_err),
+            "ssh_connect",
+            format!("会话已建立 session_id={session_id}"),
+        );
+
+        Ok(session_id)
+    }
 }
 
+#[cfg(not(target_os = "macos"))]
 async fn handle_keyboard_interactive(
     handle: &mut Handle<ClientHandler>,
     app: &AppHandle,
@@ -372,6 +432,7 @@ pub async fn ssh_auth_cancel(
 #[tauri::command]
 pub async fn test_connection(
     app: AppHandle,
+    auth_prompts: State<'_, AuthPromptManager>,
     request: TestConnectionRequest,
 ) -> Result<String, String> {
     record_event(
@@ -398,112 +459,138 @@ pub async fn test_connection(
         m
     })?;
 
-    let config = crate::ssh::config::build_client_config(
-        request.keepalive_interval_secs,
-        request.keepalive_max,
-    );
-    let handler = ClientHandler;
-
-    let mut handle = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        russh::client::connect(config, (&*request.host, request.port), handler),
-    )
-    .await
-    .map_err(|_| {
-        let m = format!("连接超时: {}:{}", request.host, request.port);
-        record_event(Some(&app), "test_connection", m.clone());
-        m
-    })?
-    .map_err(|e| {
-        let m = format!("无法连接到 {}:{} - {}", request.host, request.port, e);
-        record_event(Some(&app), "test_connection", m.clone());
-        m
-    })?;
-
-    record_event(Some(&app), "test_connection", "传输层已建立，开始认证");
-
-    let password_for_ki = match &auth {
-        AuthMethod::Password(pwd) => Some(pwd.clone()),
-        _ => None,
-    };
-
-    let mut authenticated = false;
-
-    match auth {
-        AuthMethod::Password(pwd) => {
-            match handle.authenticate_password(&request.username, &pwd).await {
-                Ok(true) => authenticated = true,
-                Ok(false) => {}
-                Err(_) => {}
-            }
-        }
-        AuthMethod::PublicKey(key) => {
-            match handle
-                .authenticate_publickey(&request.username, Arc::new(key))
-                .await
-            {
-                Ok(true) => authenticated = true,
-                Ok(false) => {}
-                Err(_) => {}
-            }
-        }
+    #[cfg(target_os = "macos")]
+    {
+        let test_sid = uuid::Uuid::new_v4().to_string();
+        let msg = crate::ssh::session::connect_openssh_test(
+            app.clone(),
+            &*auth_prompts,
+            &test_sid,
+            &request.host,
+            request.port,
+            &request.username,
+            &auth,
+            request.private_key_passphrase.as_deref(),
+            request.keepalive_interval_secs,
+            request.keepalive_max,
+        )
+        .await?;
+        record_event(Some(&app), "test_connection", "测试完成（OpenSSH）");
+        return Ok(msg);
     }
 
-    if !authenticated {
-        let ki_result = handle
-            .authenticate_keyboard_interactive_start(&request.username, None)
-            .await
-            .map_err(|e| format!("keyboard-interactive 启动失败: {}", e))?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let config = crate::ssh::config::build_client_config(
+            request.keepalive_interval_secs,
+            request.keepalive_max,
+        );
+        let handler = ClientHandler;
 
-        match ki_result {
-            KeyboardInteractiveAuthResponse::Success => authenticated = true,
-            KeyboardInteractiveAuthResponse::Failure => {}
-            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                if let Some(pwd) = password_for_ki.as_deref() {
-                    if prompts.len() == 1 && !prompts[0].echo {
-                        let resp = handle
-                            .authenticate_keyboard_interactive_respond(vec![pwd.to_string()])
-                            .await
-                            .map_err(|e| format!("认证失败: {}", e))?;
+        let mut handle = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            russh::client::connect(config, (&*request.host, request.port), handler),
+        )
+        .await
+        .map_err(|_| {
+            let m = format!("连接超时: {}:{}", request.host, request.port);
+            record_event(Some(&app), "test_connection", m.clone());
+            m
+        })?
+        .map_err(|e| {
+            let m = format!("无法连接到 {}:{} - {}", request.host, request.port, e);
+            record_event(Some(&app), "test_connection", m.clone());
+            m
+        })?;
 
-                        match resp {
-                            KeyboardInteractiveAuthResponse::Success => authenticated = true,
-                            KeyboardInteractiveAuthResponse::InfoRequest { .. } => {
-                                let _ = handle
-                                    .disconnect(russh::Disconnect::ByApplication, "", "")
-                                    .await;
-                                record_event(
-                                    Some(&app),
-                                    "test_connection",
-                                    "需二次验证（keyboard-interactive），测试连接结束",
-                                );
-                                return Ok(
-                                    "连接成功（服务器需要额外验证，如二次验证码）".to_string()
-                                );
+        record_event(Some(&app), "test_connection", "传输层已建立，开始认证");
+
+        let password_for_ki = match &auth {
+            AuthMethod::Password(pwd) => Some(pwd.clone()),
+            _ => None,
+        };
+
+        let mut authenticated = false;
+
+        match &auth {
+            AuthMethod::Password(pwd) => {
+                match handle
+                    .authenticate_password(&request.username, pwd)
+                    .await
+                {
+                    Ok(true) => authenticated = true,
+                    Ok(false) => {}
+                    Err(_) => {}
+                }
+            }
+            AuthMethod::PublicKey(key) => {
+                match handle
+                    .authenticate_publickey(&request.username, Arc::new(key.clone()))
+                    .await
+                {
+                    Ok(true) => authenticated = true,
+                    Ok(false) => {}
+                    Err(_) => {}
+                }
+            }
+        }
+
+        if !authenticated {
+            let ki_result = handle
+                .authenticate_keyboard_interactive_start(&request.username, None)
+                .await
+                .map_err(|e| format!("keyboard-interactive 启动失败: {}", e))?;
+
+            match ki_result {
+                KeyboardInteractiveAuthResponse::Success => authenticated = true,
+                KeyboardInteractiveAuthResponse::Failure => {}
+                KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                    if let Some(pwd) = password_for_ki.as_deref() {
+                        if prompts.len() == 1 && !prompts[0].echo {
+                            let resp = handle
+                                .authenticate_keyboard_interactive_respond(vec![pwd.to_string()])
+                                .await
+                                .map_err(|e| format!("认证失败: {}", e))?;
+
+                            match resp {
+                                KeyboardInteractiveAuthResponse::Success => authenticated = true,
+                                KeyboardInteractiveAuthResponse::InfoRequest { .. } => {
+                                    let _ = handle
+                                        .disconnect(russh::Disconnect::ByApplication, "", "")
+                                        .await;
+                                    record_event(
+                                        Some(&app),
+                                        "test_connection",
+                                        "需二次验证（keyboard-interactive），测试连接结束",
+                                    );
+                                    return Ok(
+                                        "连接成功（服务器需要额外验证，如二次验证码）".to_string(),
+                                    );
+                                }
+                                KeyboardInteractiveAuthResponse::Failure => {}
                             }
-                            KeyboardInteractiveAuthResponse::Failure => {}
                         }
                     }
                 }
             }
         }
+
+        if !authenticated {
+            record_event(
+                Some(&app),
+                "test_connection",
+                "认证失败: 用户名或密码/密钥不正确",
+            );
+            return Err("认证失败: 用户名或密码/密钥不正确".to_string());
+        }
+
+        let _ = handle
+            .disconnect(russh::Disconnect::ByApplication, "", "")
+            .await;
+
+        record_event(Some(&app), "test_connection", "测试完成: 连接成功");
+        Ok("连接成功".to_string())
     }
-
-    if !authenticated {
-        record_event(
-            Some(&app),
-            "test_connection",
-            "认证失败: 用户名或密码/密钥不正确",
-        );
-        return Err("认证失败: 用户名或密码/密钥不正确".to_string());
-    }
-
-    let _ = handle
-        .disconnect(russh::Disconnect::ByApplication, "", "")
-        .await;
-
-    record_event(Some(&app), "test_connection", "测试完成: 连接成功");
-    Ok("连接成功".to_string())
 }
 
 #[tauri::command]

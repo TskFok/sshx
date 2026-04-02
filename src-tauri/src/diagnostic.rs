@@ -190,8 +190,9 @@ fn should_capture(level: Level, target: &str) -> bool {
     if target.starts_with("sshx_lib") || target.starts_with("sshx::") {
         return true;
     }
-    // russh 在 Info 下较吵，仅记录 Warn 及以上；调试时可把 max_level 调到 Debug
-    target.contains("russh") && level >= Level::Warn
+    // russh / portable-pty 等在 Info 下较吵，仅记录 Warn 及以上
+    (target.contains("russh") || target.contains("portable_pty"))
+        && level >= Level::Warn
 }
 
 #[cfg(test)]

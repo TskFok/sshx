@@ -217,7 +217,8 @@ export function Settings() {
         <CardHeader>
           <CardTitle>诊断</CardTitle>
           <CardDescription>
-            默认关闭。仅在需要排查连接问题时开启；会占用少量内存并记录 sshx / russh 相关日志。
+            默认关闭。仅在需要排查连接问题时开启；会占用少量内存并记录 sshx 相关日志（Windows/Linux
+            为 russh；macOS 为系统 OpenSSH / portable-pty）。
           </CardDescription>
         </CardHeader>
         <CardContent>

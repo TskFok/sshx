@@ -1,15 +1,11 @@
-use super::auth::ClientHandler;
+use super::SessionCmd;
+use crate::ssh::auth::ClientHandler;
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use russh::client::Handle;
 use russh::ChannelId;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
-
-pub enum SessionCmd {
-    Data(Vec<u8>),
-    Resize { cols: u32, rows: u32 },
-}
 
 pub struct SshSession {
     pub id: String,
@@ -117,7 +113,7 @@ impl SshSession {
 
 #[cfg(test)]
 mod tests {
-    use super::super::auth::AuthMethod;
+    use crate::ssh::auth::AuthMethod;
 
     #[test]
     fn test_auth_method_variants() {

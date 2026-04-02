@@ -1,5 +1,7 @@
 //! 回归：vendored russh 补丁（KI 部分成功、`CHANNEL_SUCCESS` 通道号）。
 
+#![cfg(not(target_os = "macos"))]
+
 #[test]
 fn vendored_russh_patch_declared_in_manifest() {
     let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
