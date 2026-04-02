@@ -42,6 +42,116 @@ impl SessionManager {
         let sessions = self.sessions.lock().await;
         sessions.contains_key(id)
     }
+
+    #[cfg(not(target_os = "macos"))]
+    pub async fn sftp_upload(
+        &self,
+        session_id: &str,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+    ) -> Result<(), String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session
+            .sftp_upload(remote_base_dir, remote_name, local_path)
+            .await
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub async fn sftp_download(
+        &self,
+        session_id: &str,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+    ) -> Result<(), String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session
+            .sftp_download(remote_base_dir, remote_name, local_path)
+            .await
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub async fn sftp_get_remote_pwd(&self, session_id: &str) -> Result<String, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.get_remote_pwd().await
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub async fn sftp_list_remote_dir(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::models::RemoteDirSnapshot, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.list_remote_cwd().await
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn sftp_upload(
+        &self,
+        session_id: &str,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+    ) -> Result<(), String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session
+            .sftp_upload(remote_base_dir, remote_name, local_path)
+            .await
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn sftp_download(
+        &self,
+        session_id: &str,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+    ) -> Result<(), String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session
+            .sftp_download(remote_base_dir, remote_name, local_path)
+            .await
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn sftp_get_remote_pwd(&self, session_id: &str) -> Result<String, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.get_remote_pwd().await
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn sftp_list_remote_dir(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::models::RemoteDirSnapshot, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.list_remote_cwd().await
+    }
 }
 
 #[cfg(test)]

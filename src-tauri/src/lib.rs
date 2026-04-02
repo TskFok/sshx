@@ -5,7 +5,10 @@ mod diagnostic;
 mod models;
 mod ssh;
 
-use commands::{connection, diagnostic as diagnostic_commands, settings, ssh as ssh_commands};
+use commands::{
+    connection, diagnostic as diagnostic_commands, settings, sftp as sftp_commands,
+    ssh as ssh_commands,
+};
 use db::Database;
 use ssh::manager::SessionManager;
 use ssh::prompt::AuthPromptManager;
@@ -15,6 +18,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(SessionManager::new())
         .manage(AuthPromptManager::new())
         .invoke_handler(tauri::generate_handler![
@@ -36,6 +40,10 @@ pub fn run() {
             ssh_commands::ssh_auth_respond,
             ssh_commands::ssh_auth_cancel,
             ssh_commands::test_connection,
+            sftp_commands::sftp_get_remote_pwd,
+            sftp_commands::sftp_list_remote_dir,
+            sftp_commands::sftp_upload,
+            sftp_commands::sftp_download,
             settings::get_settings,
             settings::update_settings,
         ])

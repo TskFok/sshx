@@ -175,6 +175,37 @@ pub struct TestConnectionRequest {
     pub keepalive_max: u32,
 }
 
+/// SFTP 上传/下载请求（`remote_name` 为相对于 `remote_base_dir` 的相对路径，不得含 `..`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpTransferRequest {
+    pub session_id: String,
+    pub remote_base_dir: String,
+    pub remote_name: String,
+    pub local_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFileEntry {
+    pub name: String,
+    pub is_directory: bool,
+}
+
+/// 远程 shell 当前目录下的条目（由 `pwd` + `ls` 得到，与交互 shell 状态一致）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDirSnapshot {
+    pub cwd: String,
+    pub entries: Vec<RemoteFileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpSessionIdRequest {
+    pub session_id: String,
+}
+
 /// 终端 `ssh-close-*` 事件负载（前端可区分本地关标签与服务端断开）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

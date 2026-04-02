@@ -5,10 +5,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { Plus, X, Server } from "lucide-react";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { Plus, X, Server, Upload, Download, File, Folder } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +34,16 @@ interface TerminalInstance {
   reconnecting: boolean;
   unlistenData: (() => void) | null;
   unlistenClose: (() => void) | null;
+}
+
+interface RemoteFileEntry {
+  name: string;
+  isDirectory: boolean;
+}
+
+interface RemoteDirSnapshot {
+  cwd: string;
+  entries: RemoteFileEntry[];
 }
 
 interface AuthPromptData {
@@ -126,6 +138,13 @@ export function TerminalPage() {
 
   const [authPrompt, setAuthPrompt] = useState<AuthPromptData | null>(null);
   const [authResponses, setAuthResponses] = useState<string[]>([]);
+  const [sftpBusy, setSftpBusy] = useState(false);
+  const [sftpError, setSftpError] = useState<string | null>(null);
+  const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
+  const [remoteSnapshot, setRemoteSnapshot] = useState<RemoteDirSnapshot | null>(
+    null
+  );
+  const [remoteListLoading, setRemoteListLoading] = useState(false);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const pendingConnectRef = useRef<string | null>(null);
@@ -547,6 +566,103 @@ export function TerminalPage() {
 
   const hasTerminals = terminals.length > 0;
   const showEmptyState = !hasTerminals && !showPicker;
+  const activeInst = activeTab
+    ? terminals.find((t) => t.id === activeTab)
+    : undefined;
+
+  useEffect(() => {
+    setSftpError(null);
+  }, [activeTab]);
+
+  const resolveLocalBasename = (path: string): string => {
+    const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    const name = i >= 0 ? path.slice(i + 1) : path;
+    return name.trim() || "upload.bin";
+  };
+
+  const refreshRemoteList = useCallback(async () => {
+    const inst = terminals.find((t) => t.id === activeTab);
+    if (!inst || inst.disconnected) return;
+    setRemoteListLoading(true);
+    setSftpError(null);
+    try {
+      const snap = await invoke<RemoteDirSnapshot>("sftp_list_remote_dir", {
+        request: { sessionId: inst.sessionId },
+      });
+      setRemoteSnapshot(snap);
+    } catch (e) {
+      setSftpError(typeof e === "string" ? e : String(e));
+      setRemoteSnapshot(null);
+    } finally {
+      setRemoteListLoading(false);
+    }
+  }, [terminals, activeTab]);
+
+  const openDownloadDialog = useCallback(() => {
+    setSftpError(null);
+    setDownloadDialogOpen(true);
+    setRemoteSnapshot(null);
+    void refreshRemoteList();
+  }, [refreshRemoteList]);
+
+  const handleSftpUpload = useCallback(async () => {
+    const inst = terminals.find((t) => t.id === activeTab);
+    if (!inst || inst.disconnected) return;
+    setSftpError(null);
+    try {
+      setSftpBusy(true);
+      const cwd = await invoke<string>("sftp_get_remote_pwd", {
+        request: { sessionId: inst.sessionId },
+      });
+      const sel = await open({ multiple: false, directory: false });
+      if (sel == null) return;
+      const path = Array.isArray(sel) ? sel[0] : sel;
+      if (!path) return;
+      const remoteName = resolveLocalBasename(path);
+      await invoke("sftp_upload", {
+        request: {
+          sessionId: inst.sessionId,
+          remoteBaseDir: cwd,
+          remoteName,
+          localPath: path,
+        },
+      });
+    } catch (e) {
+      setSftpError(typeof e === "string" ? e : String(e));
+    } finally {
+      setSftpBusy(false);
+    }
+  }, [terminals, activeTab]);
+
+  const handleDownloadRemoteFile = useCallback(
+    async (name: string) => {
+      const inst = terminals.find((t) => t.id === activeTab);
+      if (!inst || inst.disconnected || !remoteSnapshot) return;
+      setSftpError(null);
+      try {
+        setSftpBusy(true);
+        const dest = await save({
+          defaultPath: name,
+          title: "保存下载文件",
+        });
+        if (dest == null) return;
+        await invoke("sftp_download", {
+          request: {
+            sessionId: inst.sessionId,
+            remoteBaseDir: remoteSnapshot.cwd,
+            remoteName: name,
+            localPath: dest,
+          },
+        });
+        setDownloadDialogOpen(false);
+      } catch (e) {
+        setSftpError(typeof e === "string" ? e : String(e));
+      } finally {
+        setSftpBusy(false);
+      }
+    },
+    [terminals, activeTab, remoteSnapshot]
+  );
 
   return (
     <div className="flex h-full flex-col -m-6">
@@ -592,14 +708,44 @@ export function TerminalPage() {
               </div>
             ))}
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0"
-            onClick={() => setShowPicker(!showPicker)}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="flex shrink-0 items-center gap-0.5 py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              title="上传文件到终端当前目录"
+              disabled={!activeInst || activeInst.disconnected || sftpBusy}
+              onClick={() => handleSftpUpload()}
+            >
+              <Upload className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              title="从终端当前目录下载"
+              disabled={!activeInst || activeInst.disconnected || sftpBusy}
+              onClick={() => openDownloadDialog()}
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => setShowPicker(!showPicker)}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {sftpError && hasTerminals && (
+        <div className="border-b bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          {sftpError}
         </div>
       )}
 
@@ -660,6 +806,78 @@ export function TerminalPage() {
           </div>
         </div>
       )}
+
+      <Dialog
+        open={downloadDialogOpen}
+        onOpenChange={(open) => {
+          setDownloadDialogOpen(open);
+          if (!open) setSftpError(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>从远程当前目录下载</DialogTitle>
+            <DialogDescription className="font-mono text-xs break-all">
+              {remoteListLoading
+                ? "正在读取 shell 当前目录…"
+                : remoteSnapshot?.cwd ?? ""}
+            </DialogDescription>
+          </DialogHeader>
+          {remoteListLoading && (
+            <p className="text-sm text-muted-foreground">列出文件中…</p>
+          )}
+          {!remoteListLoading && remoteSnapshot && (
+            <ScrollArea className="h-[280px] pr-3">
+              <div className="flex flex-col gap-0.5">
+                {remoteSnapshot.entries.length === 0 && (
+                  <p className="text-sm text-muted-foreground py-2">目录为空</p>
+                )}
+                {remoteSnapshot.entries.map((ent) => (
+                  <button
+                    key={ent.name}
+                    type="button"
+                    disabled={ent.isDirectory || sftpBusy}
+                    title={
+                      ent.isDirectory
+                        ? "目录请先在终端内进入后再操作"
+                        : "点击下载"
+                    }
+                    onClick={() => handleDownloadRemoteFile(ent.name)}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                      ent.isDirectory
+                        ? "cursor-not-allowed opacity-60"
+                        : "hover:bg-muted"
+                    )}
+                  >
+                    {ent.isDirectory ? (
+                      <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <File className="h-4 w-4 shrink-0" />
+                    )}
+                    <span className="truncate font-mono">{ent.name}</span>
+                  </button>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                remoteListLoading ||
+                !activeInst ||
+                activeInst.disconnected
+              }
+              onClick={() => void refreshRemoteList()}
+            >
+              刷新列表
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={authPrompt !== null} onOpenChange={(open) => { if (!open) handleAuthCancel(); }}>
         <DialogContent className="sm:max-w-[420px]">

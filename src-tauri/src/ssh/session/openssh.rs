@@ -19,6 +19,14 @@ pub struct SshSession {
     pub connection_id: String,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    /// OpenSSH 多路复用控制套接字（用于 `sftp` 复用已认证连接）。
+    control_path: String,
+    /// `/usr/bin/sftp` 参数（含 ControlPath、StrictHostKey 等，不含 `-b` 与目标）。
+    sftp_prefix_args: Vec<String>,
+    /// `/usr/bin/ssh` 复用连接执行远程命令（端口为 `-p`，与 sftp 的 `-P` 不同）。
+    ssh_mux_prefix_args: Vec<String>,
+    /// `user@host`
+    sftp_destination: String,
 }
 
 impl SshSession {
@@ -39,8 +47,124 @@ impl SshSession {
         if let Some(mut ch) = self.child.lock().ok().and_then(|mut g| g.take()) {
             let _ = ch.kill();
         }
+        let _ = std::fs::remove_file(&self.control_path);
         Ok(())
     }
+
+    /// 通过系统 `sftp`（ControlMaster 复用连接）上传。
+    pub async fn sftp_upload(
+        &self,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+    ) -> Result<(), String> {
+        use crate::ssh::path_secure::validate_remote_relative;
+        validate_remote_relative(remote_name)?;
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.sftp_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        let rb = remote_base_dir.to_string();
+        let rn = remote_name.to_string();
+        let lp = local_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let batch = format!("cd {}\nput {} {}\n", rb, lp.to_string_lossy(), rn);
+            run_sftp_with_batch(&prefix, &dest, &batch)
+        })
+        .await
+        .map_err(|e| format!("sftp 任务异常: {e}"))?
+    }
+
+    pub async fn sftp_download(
+        &self,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+    ) -> Result<(), String> {
+        use crate::ssh::path_secure::validate_remote_relative;
+        validate_remote_relative(remote_name)?;
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.sftp_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        let rb = remote_base_dir.to_string();
+        let rn = remote_name.to_string();
+        let lp = local_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let batch = format!("cd {}\nget {} {}\n", rb, rn, lp.to_string_lossy());
+            run_sftp_with_batch(&prefix, &dest, &batch)
+        })
+        .await
+        .map_err(|e| format!("sftp 任务异常: {e}"))?
+    }
+
+    /// 远程 shell 当前工作目录（通过 multiplex 上执行 `pwd`）。
+    pub async fn get_remote_pwd(&self) -> Result<String, String> {
+        use crate::ssh::path_secure::validate_remote_abs_path_for_exec;
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.ssh_mux_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        tokio::task::spawn_blocking(move || {
+            let out = run_ssh_mux_exec_argv(&prefix, &dest, &["pwd"])?;
+            validate_remote_abs_path_for_exec(&out)
+        })
+        .await
+        .map_err(|e| format!("pwd 任务异常: {e}"))?
+    }
+
+    /// 列出远程当前目录下的文件/子目录（`ls -1Ap`）。
+    pub async fn list_remote_cwd(&self) -> Result<crate::models::RemoteDirSnapshot, String> {
+        use crate::models::RemoteDirSnapshot;
+        use crate::ssh::path_secure::{parse_ls_1ap, validate_remote_abs_path_for_exec};
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.ssh_mux_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        tokio::task::spawn_blocking(move || {
+            let cwd = run_ssh_mux_exec_argv(&prefix, &dest, &["pwd"])?;
+            let cwd = validate_remote_abs_path_for_exec(&cwd)?;
+            let listing = run_ssh_mux_exec_argv(&prefix, &dest, &["ls", "-1Ap", &cwd])?;
+            let entries = parse_ls_1ap(&listing);
+            Ok(RemoteDirSnapshot { cwd, entries })
+        })
+        .await
+        .map_err(|e| format!("列目录任务异常: {e}"))?
+    }
+}
+
+/// 在已建立的 ControlMaster 连接上执行远程命令（参数直接传入远程 `exec`，不含 shell）。
+fn run_ssh_mux_exec_argv(
+    prefix: &[String],
+    destination: &str,
+    remote_argv: &[&str],
+) -> Result<String, String> {
+    if remote_argv.is_empty() {
+        return Err("remote argv 为空".to_string());
+    }
+    let mut c = std::process::Command::new(SSH_BIN);
+    c.args(prefix);
+    c.arg(destination);
+    for a in remote_argv {
+        c.arg(a);
+    }
+    let out = c
+        .output()
+        .map_err(|e| format!("执行 ssh 失败: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let hint = if stderr.is_empty() {
+            format!("远程命令失败（退出码 {:?}）", out.status.code())
+        } else {
+            stderr
+        };
+        return Err(hint);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 pub async fn connect_openssh(
@@ -65,6 +189,13 @@ pub async fn connect_openssh(
         format!("macOS OpenSSH: -E {log_path}"),
     );
 
+    let control_path = compact_control_socket_path();
+
+    let (sftp_prefix_args, sftp_destination) =
+        build_sftp_slave_prefix(&control_path, port, username, host, auth)?;
+    let (ssh_mux_prefix_args, _) =
+        build_ssh_slave_prefix(&control_path, port, username, host, auth)?;
+
     let ssh_args = build_ssh_args(
         host,
         port,
@@ -74,6 +205,7 @@ pub async fn connect_openssh(
         keepalive_max,
         &log_path,
         None,
+        Some(&control_path),
     )?;
 
     let (child, reader, writer, master) = spawn_ssh_pty(ssh_args, cols, rows).await?;
@@ -178,6 +310,10 @@ pub async fn connect_openssh(
         connection_id,
         cmd_tx,
         child,
+        control_path,
+        sftp_prefix_args,
+        ssh_mux_prefix_args,
+        sftp_destination,
     })
 }
 
@@ -209,6 +345,7 @@ pub async fn connect_openssh_test(
         keepalive_max,
         &log_path,
         Some("true"),
+        None,
     )?;
 
     let (child, reader, writer, _master) = spawn_ssh_pty(ssh_args, 80, 24).await?;
@@ -290,6 +427,146 @@ fn temp_log_path() -> Result<String, String> {
         .ok_or_else(|| "临时日志路径无效".to_string())
 }
 
+/// ControlMaster 的 Unix 套接字路径长度有上限（macOS 约 104 字节）。
+/// OpenSSH 还会在路径后追加临时后缀，因此不能用 `TMPDIR` + 长文件名（否则报 `too long for Unix domain socket`）。
+fn compact_control_socket_path() -> String {
+    let id: String = uuid::Uuid::new_v4()
+        .as_simple()
+        .to_string()
+        .chars()
+        .take(16)
+        .collect();
+    format!("/tmp/sshx-{id}.sock")
+}
+
+fn run_sftp_with_batch(
+    prefix_args: &[String],
+    destination: &str,
+    batch: &str,
+) -> Result<(), String> {
+    const SFTP_BIN: &str = "/usr/bin/sftp";
+    let batch_path = std::env::temp_dir().join(format!("sshx-sftp-b-{}.txt", uuid::Uuid::new_v4()));
+    std::fs::write(&batch_path, batch).map_err(|e| format!("写入 SFTP 批处理失败: {e}"))?;
+    let status = std::process::Command::new(SFTP_BIN)
+        .args(prefix_args)
+        .arg("-b")
+        .arg(&batch_path)
+        .arg(destination)
+        .status()
+        .map_err(|e| format!("启动 sftp 失败: {e}"))?;
+    let _ = std::fs::remove_file(&batch_path);
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "sftp 失败（退出码 {:?}）；请确认服务端已启用 SFTP / 路径与权限是否正确",
+            status.code()
+        ))
+    }
+}
+
+/// 供复用连接的 `sftp` 子进程使用的参数（`BatchMode`、`ControlMaster=no` 与同主机认证选项）。
+fn build_sftp_slave_prefix(
+    control_path: &str,
+    port: u16,
+    username: &str,
+    host: &str,
+    auth: &AuthMethod,
+) -> Result<(Vec<String>, String), String> {
+    let mut args = vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ControlMaster=no".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={control_path}"),
+        "-o".to_string(),
+        "StrictHostKeyChecking=no".to_string(),
+        "-o".to_string(),
+        "UserKnownHostsFile=/dev/null".to_string(),
+        "-o".to_string(),
+        "HostKeyAlgorithms=+ssh-rsa".to_string(),
+    ];
+    if port != 22 {
+        args.push("-P".to_string());
+        args.push(port.to_string());
+    }
+    match auth {
+        AuthMethod::Password(_) => {
+            args.push("-o".to_string());
+            args.push("PreferredAuthentications=keyboard-interactive,password".to_string());
+            args.push("-o".to_string());
+            args.push("PubkeyAuthentication=no".to_string());
+            args.push("-o".to_string());
+            args.push("KbdInteractiveAuthentication=yes".to_string());
+        }
+        AuthMethod::KeyFile(path) => {
+            args.push("-i".to_string());
+            args.push(path.clone());
+            args.push("-o".to_string());
+            args.push("IdentitiesOnly=yes".to_string());
+            args.push("-o".to_string());
+            args.push("PreferredAuthentications=publickey,keyboard-interactive".to_string());
+            args.push("-o".to_string());
+            args.push("KbdInteractiveAuthentication=yes".to_string());
+            args.push("-o".to_string());
+            args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+        }
+    }
+    Ok((args, format!("{username}@{host}")))
+}
+
+/// 与 [`build_sftp_slave_prefix`] 相同，但非默认端口时使用 `ssh` 的 `-p`（`sftp` 为 `-P`）。
+fn build_ssh_slave_prefix(
+    control_path: &str,
+    port: u16,
+    username: &str,
+    host: &str,
+    auth: &AuthMethod,
+) -> Result<(Vec<String>, String), String> {
+    let mut args = vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ControlMaster=no".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={control_path}"),
+        "-o".to_string(),
+        "StrictHostKeyChecking=no".to_string(),
+        "-o".to_string(),
+        "UserKnownHostsFile=/dev/null".to_string(),
+        "-o".to_string(),
+        "HostKeyAlgorithms=+ssh-rsa".to_string(),
+    ];
+    if port != 22 {
+        args.push("-p".to_string());
+        args.push(port.to_string());
+    }
+    match auth {
+        AuthMethod::Password(_) => {
+            args.push("-o".to_string());
+            args.push("PreferredAuthentications=keyboard-interactive,password".to_string());
+            args.push("-o".to_string());
+            args.push("PubkeyAuthentication=no".to_string());
+            args.push("-o".to_string());
+            args.push("KbdInteractiveAuthentication=yes".to_string());
+        }
+        AuthMethod::KeyFile(path) => {
+            args.push("-i".to_string());
+            args.push(path.clone());
+            args.push("-o".to_string());
+            args.push("IdentitiesOnly=yes".to_string());
+            args.push("-o".to_string());
+            args.push("PreferredAuthentications=publickey,keyboard-interactive".to_string());
+            args.push("-o".to_string());
+            args.push("KbdInteractiveAuthentication=yes".to_string());
+            args.push("-o".to_string());
+            args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+        }
+    }
+    Ok((args, format!("{username}@{host}")))
+}
+
 fn build_ssh_args(
     host: &str,
     port: u16,
@@ -299,6 +576,7 @@ fn build_ssh_args(
     keepalive_max: u32,
     log_path: &str,
     remote_command: Option<&str>,
+    control_socket: Option<&str>,
 ) -> Result<Vec<String>, String> {
     // DEBUG1 ≈ ssh -v，确保 -E 日志里出现 Authentication succeeded / Authenticated to
     // （VERBOSE 在部分版本下不足以写入这些行，导致堡垒机场景误判超时）。
@@ -320,6 +598,15 @@ fn build_ssh_args(
     // 会在 KEX 阶段报 “no matching host key type / Their offer: ssh-rsa”，与「用户公钥算法」无关。
     args.push("-o".to_string());
     args.push("HostKeyAlgorithms=+ssh-rsa".to_string());
+
+    if let Some(sock) = control_socket {
+        args.push("-o".to_string());
+        args.push("ControlMaster=yes".to_string());
+        args.push("-o".to_string());
+        args.push("ControlPersist=no".to_string());
+        args.push("-o".to_string());
+        args.push(format!("ControlPath={sock}"));
+    }
 
     if keepalive_interval_secs > 0 {
         args.push("-o".to_string());
@@ -829,6 +1116,7 @@ mod tests {
             4,
             "/tmp/ssh.log",
             None,
+            None,
         )
         .unwrap();
         assert!(args.contains(&"-p".into()) && args.contains(&"2222".into()));
@@ -844,6 +1132,36 @@ mod tests {
     }
 
     #[test]
+    fn compact_control_socket_path_fits_unix_limit() {
+        let p = compact_control_socket_path();
+        assert!(
+            p.len() <= 80,
+            "须为 OpenSSH 追加后缀预留空间（macOS Unix 路径约 ≤104）：len={} path={p}",
+            p.len()
+        );
+        assert!(p.starts_with("/tmp/sshx-") && p.ends_with(".sock"));
+    }
+
+    #[test]
+    fn build_ssh_args_includes_control_master_when_multiplex() {
+        let args = build_ssh_args(
+            "h",
+            22,
+            "u",
+            &AuthMethod::Password("x".into()),
+            0,
+            0,
+            "/log",
+            None,
+            Some("/tmp/sshx-test.sock"),
+        )
+        .unwrap();
+        assert!(args.iter().any(|a| a == "ControlMaster=yes"));
+        assert!(args.iter().any(|a| a == "ControlPersist=no"));
+        assert!(args.iter().any(|a| *a == "ControlPath=/tmp/sshx-test.sock"));
+    }
+
+    #[test]
     fn build_ssh_args_key_remote_true() {
         let args = build_ssh_args(
             "h",
@@ -854,6 +1172,7 @@ mod tests {
             0,
             "/log",
             Some("true"),
+            None,
         )
         .unwrap();
         assert!(args.contains(&"-i".into()));
