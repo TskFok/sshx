@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "clean": "rm -rf node_modules/.vite dist src-tauri/target",
+    "clean:all": "rm -rf node_modules dist src-tauri/target",
+    "reset": "rm -rf node_modules dist src-tauri/target && pnpm install"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.11",
