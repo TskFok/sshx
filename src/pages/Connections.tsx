@@ -441,8 +441,8 @@ export function Connections() {
           if (!open) setTestResult(null);
         }}
       >
-        <DialogContent className="sm:max-w-[500px]">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90dvh] flex-col gap-4 overflow-hidden p-6 sm:max-w-[500px]">
+          <DialogHeader className="shrink-0">
             <DialogTitle>
               {editingId ? "编辑连接" : "新建连接"}
             </DialogTitle>
@@ -450,7 +450,8 @@ export function Connections() {
               填写 SSH 服务器的连接信息
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
+            <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>名称</Label>
@@ -620,24 +621,25 @@ export function Connections() {
                 </p>
               </div>
             </div>
-          </div>
-          {testResult && (
-            <div
-              className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
-                testResult.ok
-                  ? "bg-green-500/10 text-green-600 dark:text-green-400"
-                  : "bg-destructive/10 text-destructive"
-              }`}
-            >
-              {testResult.ok ? (
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-              ) : (
-                <XCircle className="h-4 w-4 shrink-0" />
-              )}
-              <span className="break-all">{testResult.message}</span>
             </div>
-          )}
-          <DialogFooter>
+            {testResult && (
+              <div
+                className={`mb-2 flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
+                  testResult.ok
+                    ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                    : "bg-destructive/10 text-destructive"
+                }`}
+              >
+                {testResult.ok ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                ) : (
+                  <XCircle className="h-4 w-4 shrink-0" />
+                )}
+                <span className="break-all">{testResult.message}</span>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="shrink-0 border-t border-border/60 pt-4">
             <Button
               variant="outline"
               onClick={handleTestConnection}
