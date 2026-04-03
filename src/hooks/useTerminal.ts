@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { DEFAULT_TERMINAL_SCROLLBACK_LINES } from "@/lib/terminalConfig";
 
 interface UseTerminalOptions {
   fontSize?: number;
@@ -35,7 +36,7 @@ export function useTerminal(options: UseTerminalOptions = {}) {
         fontSize,
         fontFamily,
         cursorStyle,
-        scrollback: 10000,
+        scrollback: DEFAULT_TERMINAL_SCROLLBACK_LINES,
         theme: {
           background: "#1e1e2e",
           foreground: "#cdd6f4",

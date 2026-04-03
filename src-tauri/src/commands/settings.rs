@@ -4,6 +4,13 @@ use crate::models::AppSettings;
 use rusqlite::Connection;
 use tauri::{AppHandle, State};
 
+const TERMINAL_SCROLLBACK_MIN: u32 = 1_000;
+const TERMINAL_SCROLLBACK_MAX: u32 = 500_000;
+
+fn clamp_terminal_scrollback_lines(n: u32) -> u32 {
+    n.clamp(TERMINAL_SCROLLBACK_MIN, TERMINAL_SCROLLBACK_MAX)
+}
+
 /// 从设置表读取「是否收集诊断日志」，无键则为 false。
 pub(crate) fn read_diagnostic_logging_enabled(conn: &Connection) -> bool {
     conn.query_row(
@@ -38,6 +45,10 @@ pub fn get_settings(db: State<'_, Database>) -> Result<AppSettings, String> {
             "font_family" => settings.font_family = value,
             "theme" => settings.theme = value,
             "terminal_cursor_style" => settings.terminal_cursor_style = value,
+            "terminal_scrollback_lines" => {
+                settings.terminal_scrollback_lines =
+                    value.parse().unwrap_or(settings.terminal_scrollback_lines);
+            }
             "diagnostic_logging_enabled" => {
                 settings.diagnostic_logging_enabled = value == "true";
             }
@@ -52,15 +63,22 @@ pub fn get_settings(db: State<'_, Database>) -> Result<AppSettings, String> {
 pub fn update_settings(
     app: AppHandle,
     db: State<'_, Database>,
-    settings: AppSettings,
+    mut settings: AppSettings,
 ) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+
+    settings.terminal_scrollback_lines =
+        clamp_terminal_scrollback_lines(settings.terminal_scrollback_lines);
 
     let pairs = vec![
         ("font_size", settings.font_size.to_string()),
         ("font_family", settings.font_family.clone()),
         ("theme", settings.theme.clone()),
         ("terminal_cursor_style", settings.terminal_cursor_style.clone()),
+        (
+            "terminal_scrollback_lines",
+            settings.terminal_scrollback_lines.to_string(),
+        ),
         (
             "diagnostic_logging_enabled",
             settings.diagnostic_logging_enabled.to_string(),
@@ -79,4 +97,22 @@ pub fn update_settings(
     diagnostic::set_capture_enabled(settings.diagnostic_logging_enabled, Some(&app));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod scrollback_tests {
+    use super::{clamp_terminal_scrollback_lines, TERMINAL_SCROLLBACK_MAX, TERMINAL_SCROLLBACK_MIN};
+
+    #[test]
+    fn clamp_terminal_scrollback_lines_respects_bounds() {
+        assert_eq!(
+            clamp_terminal_scrollback_lines(500),
+            TERMINAL_SCROLLBACK_MIN
+        );
+        assert_eq!(
+            clamp_terminal_scrollback_lines(999_999),
+            TERMINAL_SCROLLBACK_MAX
+        );
+        assert_eq!(clamp_terminal_scrollback_lines(20_000), 20_000);
+    }
 }

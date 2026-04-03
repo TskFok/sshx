@@ -120,6 +120,8 @@ pub struct AppSettings {
     pub font_family: String,
     pub theme: String,
     pub terminal_cursor_style: String,
+    /// xterm 滚动缓冲区保留的历史行数（不含视口），超出后最早行被丢弃。
+    pub terminal_scrollback_lines: u32,
     /// 默认关闭：为 true 时收集诊断缓冲与 `log` 路由日志。
     #[serde(default)]
     pub diagnostic_logging_enabled: bool,
@@ -132,6 +134,7 @@ impl Default for AppSettings {
             font_family: "Menlo, Monaco, 'Courier New', monospace".to_string(),
             theme: "system".to_string(),
             terminal_cursor_style: "block".to_string(),
+            terminal_scrollback_lines: 50_000,
             diagnostic_logging_enabled: false,
         }
     }

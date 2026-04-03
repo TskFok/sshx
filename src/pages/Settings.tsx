@@ -19,12 +19,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAppStore } from "@/store";
+import {
+  clampTerminalScrollbackLines,
+  DEFAULT_TERMINAL_SCROLLBACK_LINES,
+  MAX_TERMINAL_SCROLLBACK_LINES,
+  MIN_TERMINAL_SCROLLBACK_LINES,
+} from "@/lib/terminalConfig";
+import { SSHX_SETTINGS_UPDATED_EVENT } from "@/lib/settingsEvents";
 
 interface SettingsForm {
   fontSize: number;
   fontFamily: string;
   theme: string;
   terminalCursorStyle: string;
+  terminalScrollbackLines: number;
   diagnosticLoggingEnabled: boolean;
 }
 
@@ -37,6 +45,7 @@ export function Settings() {
     fontFamily: "Menlo, Monaco, 'Courier New', monospace",
     theme: "system",
     terminalCursorStyle: "block",
+    terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
     diagnosticLoggingEnabled: false,
   });
   const [saved, setSaved] = useState(false);
@@ -51,6 +60,10 @@ export function Settings() {
             "Menlo, Monaco, 'Courier New', monospace",
           theme: settings.theme ?? "system",
           terminalCursorStyle: settings.terminalCursorStyle ?? "block",
+          terminalScrollbackLines: clampTerminalScrollbackLines(
+            settings.terminalScrollbackLines ??
+              DEFAULT_TERMINAL_SCROLLBACK_LINES
+          ),
           diagnosticLoggingEnabled:
             settings.diagnosticLoggingEnabled ?? false,
         });
@@ -60,15 +73,21 @@ export function Settings() {
 
   const handleSave = async () => {
     try {
+      const terminalScrollbackLines = clampTerminalScrollbackLines(
+        form.terminalScrollbackLines
+      );
       await invoke("update_settings", {
         settings: {
           fontSize: form.fontSize,
           fontFamily: form.fontFamily,
           theme: form.theme,
           terminalCursorStyle: form.terminalCursorStyle,
+          terminalScrollbackLines,
           diagnosticLoggingEnabled: form.diagnosticLoggingEnabled,
         },
       });
+      setForm((f) => ({ ...f, terminalScrollbackLines }));
+      window.dispatchEvent(new CustomEvent(SSHX_SETTINGS_UPDATED_EVENT));
 
       if (form.theme === "dark") {
         setTheme("dark");
@@ -209,6 +228,30 @@ export function Settings() {
                 setForm({ ...form, fontFamily: e.target.value })
               }
             />
+          </div>
+          <div className="space-y-2">
+            <Label>滚动历史行数上限</Label>
+            <Input
+              type="number"
+              min={MIN_TERMINAL_SCROLLBACK_LINES}
+              max={MAX_TERMINAL_SCROLLBACK_LINES}
+              value={form.terminalScrollbackLines}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  terminalScrollbackLines:
+                    parseInt(e.target.value, 10) ||
+                    DEFAULT_TERMINAL_SCROLLBACK_LINES,
+                })
+              }
+            />
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              控制 xterm
+              在内存中保留的、可向上滚动的历史行数（不含当前一屏）。数值越大，越早的输出越不容易被挤掉，但占用内存与滚动成本会升高；保存时会在{" "}
+              {MIN_TERMINAL_SCROLLBACK_LINES.toLocaleString()}～
+              {MAX_TERMINAL_SCROLLBACK_LINES.toLocaleString()}{" "}
+              之间自动约束。已打开的标签在保存后会立即应用新上限。
+            </p>
           </div>
         </CardContent>
       </Card>

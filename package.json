@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "clean": "rm -rf node_modules/.vite dist src-tauri/target",
     "clean:all": "rm -rf node_modules dist src-tauri/target",
-    "reset": "rm -rf node_modules dist src-tauri/target && pnpm install"
+    "reset": "rm -rf node_modules dist src-tauri/target && pnpm install",
+    "test": "vitest run"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.11",
@@ -49,6 +50,7 @@
     "tailwindcss": "^3.4.19",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.9.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.1",
+    "vitest": "^3.2.4"
   }
 }

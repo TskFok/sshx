@@ -20,7 +20,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAppStore, type ConnectionInfo, type SshClosePayload } from "@/store";
+import {
+  clampTerminalScrollbackLines,
+  DEFAULT_TERMINAL_SCROLLBACK_LINES,
+} from "@/lib/terminalConfig";
+import { SSHX_SETTINGS_UPDATED_EVENT } from "@/lib/settingsEvents";
 import { cn } from "@/lib/utils";
+
+interface AppSettingsScrollback {
+  terminalScrollbackLines?: number;
+}
 
 interface TerminalInstance {
   id: string;
@@ -131,7 +140,6 @@ export function TerminalPage() {
 
   const [terminals, setTerminals] = useState<TerminalInstance[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [showZoomHint, setShowZoomHint] = useState(false);
@@ -148,7 +156,7 @@ export function TerminalPage() {
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const pendingConnectRef = useRef<string | null>(null);
-  const connectingRef = useRef(false);
+  const terminalScrollbackRef = useRef(DEFAULT_TERMINAL_SCROLLBACK_LINES);
   const fontSizeRef = useRef(DEFAULT_FONT_SIZE);
   const zoomHintTimer = useRef<ReturnType<typeof setTimeout>>();
   fontSizeRef.current = fontSize;
@@ -162,6 +170,35 @@ export function TerminalPage() {
       .then(setConnections)
       .catch(() => {});
   }, [setConnections]);
+
+  const refreshTerminalScrollbackSettings = useCallback(async () => {
+    try {
+      const s = await invoke<AppSettingsScrollback>("get_settings");
+      const v = clampTerminalScrollbackLines(
+        s.terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES
+      );
+      terminalScrollbackRef.current = v;
+      setTerminals((prev) => {
+        for (const t of prev) {
+          t.terminal.options.scrollback = v;
+        }
+        return [...prev];
+      });
+    } catch {
+      terminalScrollbackRef.current = DEFAULT_TERMINAL_SCROLLBACK_LINES;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTerminalScrollbackSettings();
+    const onSettingsUpdated = () => void refreshTerminalScrollbackSettings();
+    window.addEventListener(SSHX_SETTINGS_UPDATED_EVENT, onSettingsUpdated);
+    return () =>
+      window.removeEventListener(
+        SSHX_SETTINGS_UPDATED_EVENT,
+        onSettingsUpdated
+      );
+  }, [refreshTerminalScrollbackSettings]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -323,13 +360,8 @@ export function TerminalPage() {
 
   const connectToHost = useCallback(
     async (connectionId: string) => {
-      if (connectingRef.current) return;
-      connectingRef.current = true;
-      setConnecting(true);
-
-      try {
-        const conn = connections.find((c) => c.id === connectionId);
-        if (!conn || !wrapperRef.current) return;
+      const conn = connections.find((c) => c.id === connectionId);
+      if (!conn || !wrapperRef.current) return;
 
         const containerEl = document.createElement("div");
         containerEl.style.width = "100%";
@@ -342,6 +374,7 @@ export function TerminalPage() {
           cursorBlink: true,
           fontSize: fontSizeRef.current,
           fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+          scrollback: terminalScrollbackRef.current,
           theme: {
             background: "#1e1e2e",
             foreground: "#cdd6f4",
@@ -480,10 +513,6 @@ export function TerminalPage() {
         } finally {
           unlistenPrompt?.();
         }
-      } finally {
-        connectingRef.current = false;
-        setConnecting(false);
-      }
     },
     [connections, triggerUpdate, setupAuthPromptListener]
   );
@@ -495,7 +524,7 @@ export function TerminalPage() {
       pendingConnectRef.current = state.connectionId;
       navigate(location.pathname, { replace: true, state: null });
     }
-    if (pendingConnectRef.current && connections.length > 0 && !connectingRef.current) {
+    if (pendingConnectRef.current && connections.length > 0) {
       const id = pendingConnectRef.current;
       pendingConnectRef.current = null;
       connectToHost(id);
@@ -758,7 +787,6 @@ export function TerminalPage() {
                 key={conn.id}
                 className="flex items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted"
                 onClick={() => connectToHost(conn.id)}
-                disabled={connecting}
               >
                 <Server className="h-4 w-4 text-muted-foreground" />
                 <div>
