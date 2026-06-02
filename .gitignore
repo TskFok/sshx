@@ -1,0 +1,39 @@
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Logs ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Environment / local config ----
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ---- Node / Frontend ----
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+*.tsbuildinfo
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- Tauri / Rust ----
+src-tauri/target/
+src-tauri/.cargo/
+src-tauri/gen/
+src-tauri/.tauri/
+
+# ---- Local machine files ----
+**/local.properties
+**/local.properties.*
