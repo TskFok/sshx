@@ -130,6 +130,28 @@ sshx/
 
 保存设置后，已打开的标签会立即应用新的上限；新建标签也会使用当前设置。合法范围由应用在前后端统一约束（当前为 1,000～500,000 行）。
 
+### macOS 下长按字母出现重音字符菜单，导致 Vim/vi 中无法连续触发 `dd`
+
+在 macOS 上，SSHX 运行在 Tauri/WebView 中。系统可能会把长按字母识别为“重音字符选择”，例如长按 `d` 时弹出字符候选菜单，而不是持续向终端发送 `dddd...`。这会导致 Vim/vi 无法像系统 Terminal.app 一样通过长按 `d` 连续组成 `dd` 删除行。
+
+可按应用标识关闭 SSHX 的长按重音字符菜单：
+
+```bash
+defaults write com.sshx.app ApplePressAndHoldEnabled -bool false
+```
+
+执行后请完全退出 SSHX 并重新打开。如果仍未生效，可以临时关闭全局长按重音字符菜单：
+
+```bash
+defaults write -g ApplePressAndHoldEnabled -bool false
+```
+
+如需恢复全局默认行为：
+
+```bash
+defaults write -g ApplePressAndHoldEnabled -bool true
+```
+
 ### 1) 堡垒机提示 `no common algorithm`
 
 通常是算法协商不兼容。项目已加入更多兼容算法；若仍失败，请提供堡垒机支持的算法列表。
@@ -171,4 +193,3 @@ sshx/
 - [xterm.js](https://xtermjs.org/)
 - [russh](https://github.com/warp-tech/russh)
 - [shadcn/ui](https://ui.shadcn.com/)
-
