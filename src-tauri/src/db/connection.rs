@@ -1,5 +1,6 @@
 use crate::models::{AuthType, ConnectionInfo, CreateConnectionRequest, UpdateConnectionRequest};
 use rusqlite::{params, Connection};
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -14,8 +15,8 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, auth_type, password, private_key, \
          private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
-         created_at, updated_at \
-         FROM connections ORDER BY updated_at DESC",
+         created_at, updated_at, sort_order \
+         FROM connections ORDER BY sort_order ASC, updated_at DESC",
     )?;
 
     let rows = stmt.query_map([], |row| {
@@ -34,6 +35,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
             keepalive_max: row.get::<_, i64>(11)? as u32,
             created_at: row.get(12)?,
             updated_at: row.get(13)?,
+            sort_order: row.get(14)?,
         })
     })?;
 
@@ -44,7 +46,7 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, 
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, auth_type, password, private_key, \
          private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
-         created_at, updated_at \
+         created_at, updated_at, sort_order \
          FROM connections WHERE id = ?1",
     )?;
 
@@ -64,6 +66,7 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, 
             keepalive_max: row.get::<_, i64>(11)? as u32,
             created_at: row.get(12)?,
             updated_at: row.get(13)?,
+            sort_order: row.get(14)?,
         })
     })?;
 
@@ -79,12 +82,13 @@ pub fn create(
 ) -> Result<ConnectionInfo, rusqlite::Error> {
     let id = Uuid::new_v4().to_string();
     let now = now_timestamp();
+    let sort_order = next_sort_order(conn, req.group_id.as_deref())?;
 
     conn.execute(
         "INSERT INTO connections (id, name, host, port, username, auth_type, password, \
          private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
-         created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         created_at, updated_at, sort_order) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             id,
             req.name,
@@ -100,6 +104,7 @@ pub fn create(
             req.keepalive_max as i64,
             now,
             now,
+            sort_order,
         ],
     )?;
 
@@ -118,16 +123,32 @@ pub fn create(
         keepalive_max: req.keepalive_max,
         created_at: now,
         updated_at: now,
+        sort_order,
     })
 }
 
 pub fn update(conn: &Connection, req: &UpdateConnectionRequest) -> Result<(), rusqlite::Error> {
     let now = now_timestamp();
+    let current_group_id: Option<String> = conn.query_row(
+        "SELECT group_id FROM connections WHERE id = ?1",
+        params![req.id],
+        |row| row.get(0),
+    )?;
+    let sort_order = if current_group_id == req.group_id {
+        conn.query_row(
+            "SELECT sort_order FROM connections WHERE id = ?1",
+            params![req.id],
+            |row| row.get(0),
+        )?
+    } else {
+        next_sort_order(conn, req.group_id.as_deref())?
+    };
+
     conn.execute(
         "UPDATE connections SET name = ?1, host = ?2, port = ?3, username = ?4, \
          auth_type = ?5, password = ?6, private_key = ?7, private_key_passphrase = ?8, \
-         group_id = ?9, keepalive_interval_secs = ?10, keepalive_max = ?11, updated_at = ?12 \
-         WHERE id = ?13",
+         group_id = ?9, keepalive_interval_secs = ?10, keepalive_max = ?11, updated_at = ?12, \
+         sort_order = ?13 WHERE id = ?14",
         params![
             req.name,
             req.host,
@@ -141,6 +162,7 @@ pub fn update(conn: &Connection, req: &UpdateConnectionRequest) -> Result<(), ru
             req.keepalive_interval_secs as i64,
             req.keepalive_max as i64,
             now,
+            sort_order,
             req.id,
         ],
     )?;
@@ -152,10 +174,78 @@ pub fn delete(conn: &Connection, id: &str) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+fn next_sort_order(conn: &Connection, group_id: Option<&str>) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT COALESCE(MAX(sort_order) + 1, 0)
+         FROM connections
+         WHERE group_id = ?1 OR (group_id IS NULL AND ?1 IS NULL)",
+        params![group_id],
+        |row| row.get(0),
+    )
+}
+
+pub fn reorder(
+    conn: &Connection,
+    group_id: Option<&str>,
+    connection_ids: &[String],
+) -> Result<(), rusqlite::Error> {
+    let valid_ids = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM connections
+             WHERE group_id = ?1 OR (group_id IS NULL AND ?1 IS NULL)",
+        )?;
+        let rows = stmt.query_map(params![group_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<HashSet<_>, _>>()?
+    };
+
+    conn.execute("BEGIN IMMEDIATE TRANSACTION", [])?;
+
+    let result = (|| {
+        let mut stmt = conn.prepare(
+            "UPDATE connections
+             SET sort_order = ?1
+             WHERE id = ?2 AND (group_id = ?3 OR (group_id IS NULL AND ?3 IS NULL))",
+        )?;
+        let mut sort_order = 0_i64;
+        for id in connection_ids {
+            if valid_ids.contains(id) {
+                stmt.execute(params![sort_order, id, group_id])?;
+                sort_order += 1;
+            }
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(err)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::create_test_db;
+    use crate::db::group;
+    use crate::models::CreateGroupRequest;
+
+    fn create_group(conn: &Connection, name: &str) -> String {
+        group::create(
+            conn,
+            &CreateGroupRequest {
+                name: name.to_string(),
+                color: "#000000".to_string(),
+            },
+        )
+        .unwrap()
+        .id
+    }
 
     #[test]
     fn test_create_and_list() {
@@ -269,5 +359,189 @@ mod tests {
         delete(&conn, &created.id).unwrap();
         let found = get_by_id(&conn, &created.id).unwrap();
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_create_appends_connection_sort_order_within_group() {
+        let conn = create_test_db();
+        let group_id = create_group(&conn, "prod");
+        let first = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "first".to_string(),
+                host: "1.1.1.1".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(group_id.clone()),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+        let second = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "second".to_string(),
+                host: "2.2.2.2".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(group_id),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(first.sort_order, 0);
+        assert_eq!(second.sort_order, 1);
+    }
+
+    #[test]
+    fn test_reorder_connections_updates_only_target_group() {
+        let conn = create_test_db();
+        let prod_group_id = create_group(&conn, "prod");
+        let test_group_id = create_group(&conn, "test");
+        let first = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "first".to_string(),
+                host: "1.1.1.1".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(prod_group_id.clone()),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+        let second = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "second".to_string(),
+                host: "2.2.2.2".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(prod_group_id.clone()),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+        let other = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "other".to_string(),
+                host: "3.3.3.3".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(test_group_id),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+
+        reorder(
+            &conn,
+            Some(&prod_group_id),
+            &[second.id.clone(), first.id.clone(), other.id.clone()],
+        )
+        .unwrap();
+        let list = list_all(&conn).unwrap();
+        let prod_ids = list
+            .iter()
+            .filter(|c| c.group_id.as_deref() == Some(prod_group_id.as_str()))
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>();
+        let other = get_by_id(&conn, &other.id).unwrap().unwrap();
+
+        assert_eq!(prod_ids, vec![second.id.as_str(), first.id.as_str()]);
+        assert_eq!(other.sort_order, 0);
+    }
+
+    #[test]
+    fn test_update_connection_group_appends_to_new_group() {
+        let conn = create_test_db();
+        let prod_group_id = create_group(&conn, "prod");
+        let test_group_id = create_group(&conn, "test");
+        let existing = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "existing".to_string(),
+                host: "1.1.1.1".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(test_group_id.clone()),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+        let moved = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "moved".to_string(),
+                host: "2.2.2.2".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: None,
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(prod_group_id),
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+            },
+        )
+        .unwrap();
+
+        update(
+            &conn,
+            &UpdateConnectionRequest {
+                id: moved.id.clone(),
+                name: moved.name,
+                host: moved.host,
+                port: moved.port,
+                username: moved.username,
+                auth_type: moved.auth_type,
+                password: moved.password,
+                private_key: moved.private_key,
+                private_key_passphrase: moved.private_key_passphrase,
+                group_id: Some(test_group_id.clone()),
+                keepalive_interval_secs: moved.keepalive_interval_secs,
+                keepalive_max: moved.keepalive_max,
+            },
+        )
+        .unwrap();
+
+        let moved = get_by_id(&conn, &moved.id).unwrap().unwrap();
+
+        assert_eq!(existing.sort_order, 0);
+        assert_eq!(moved.group_id.as_deref(), Some(test_group_id.as_str()));
+        assert_eq!(moved.sort_order, 1);
     }
 }

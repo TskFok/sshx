@@ -36,6 +36,16 @@ pub fn update_connection(
 }
 
 #[tauri::command]
+pub fn reorder_connections(
+    db: State<'_, Database>,
+    request: ReorderConnectionsRequest,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    db::connection::reorder(&conn, request.group_id.as_deref(), &request.connection_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn delete_connection(db: State<'_, Database>, id: String) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     db::connection::delete(&conn, &id).map_err(|e| e.to_string())
@@ -60,6 +70,15 @@ pub fn create_group(
 pub fn update_group(db: State<'_, Database>, request: UpdateGroupRequest) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     db::group::update(&conn, &request).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn reorder_groups(
+    db: State<'_, Database>,
+    request: ReorderGroupsRequest,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    db::group::reorder(&conn, &request.group_ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

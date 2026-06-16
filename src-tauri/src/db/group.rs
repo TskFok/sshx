@@ -11,8 +11,11 @@ fn now_timestamp() -> i64 {
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionGroup>, rusqlite::Error> {
-    let mut stmt =
-        conn.prepare("SELECT id, name, color, created_at FROM connection_groups ORDER BY name")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, color, created_at, sort_order
+         FROM connection_groups
+         ORDER BY sort_order ASC, name ASC",
+    )?;
 
     let rows = stmt.query_map([], |row| {
         Ok(ConnectionGroup {
@@ -20,6 +23,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionGroup>, rusqlite::Err
             name: row.get(1)?,
             color: row.get(2)?,
             created_at: row.get(3)?,
+            sort_order: row.get(4)?,
         })
     })?;
 
@@ -32,10 +36,16 @@ pub fn create(
 ) -> Result<ConnectionGroup, rusqlite::Error> {
     let id = Uuid::new_v4().to_string();
     let now = now_timestamp();
+    let sort_order: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM connection_groups",
+        [],
+        |row| row.get(0),
+    )?;
 
     conn.execute(
-        "INSERT INTO connection_groups (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![id, req.name, req.color, now],
+        "INSERT INTO connection_groups (id, name, color, created_at, sort_order)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, req.name, req.color, now, sort_order],
     )?;
 
     Ok(ConnectionGroup {
@@ -43,6 +53,7 @@ pub fn create(
         name: req.name.clone(),
         color: req.color.clone(),
         created_at: now,
+        sort_order,
     })
 }
 
@@ -57,6 +68,30 @@ pub fn update(conn: &Connection, req: &UpdateGroupRequest) -> Result<(), rusqlit
 pub fn delete(conn: &Connection, id: &str) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM connection_groups WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+pub fn reorder(conn: &Connection, group_ids: &[String]) -> Result<(), rusqlite::Error> {
+    conn.execute("BEGIN IMMEDIATE TRANSACTION", [])?;
+
+    let result = (|| {
+        let mut stmt =
+            conn.prepare("UPDATE connection_groups SET sort_order = ?1 WHERE id = ?2")?;
+        for (index, id) in group_ids.iter().enumerate() {
+            stmt.execute(params![index as i64, id])?;
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(err)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -115,5 +150,68 @@ mod tests {
         delete(&conn, &created.id).unwrap();
         let list = list_all(&conn).unwrap();
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_create_appends_group_sort_order() {
+        let conn = create_test_db();
+        let first = create(
+            &conn,
+            &CreateGroupRequest {
+                name: "b".to_string(),
+                color: "#000000".to_string(),
+            },
+        )
+        .unwrap();
+        let second = create(
+            &conn,
+            &CreateGroupRequest {
+                name: "a".to_string(),
+                color: "#000000".to_string(),
+            },
+        )
+        .unwrap();
+
+        let list = list_all(&conn).unwrap();
+
+        assert_eq!(first.sort_order, 0);
+        assert_eq!(second.sort_order, 1);
+        assert_eq!(
+            list.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
+            vec![first.id.as_str(), second.id.as_str(),]
+        );
+    }
+
+    #[test]
+    fn test_reorder_groups_updates_sort_order() {
+        let conn = create_test_db();
+        let first = create(
+            &conn,
+            &CreateGroupRequest {
+                name: "first".to_string(),
+                color: "#000000".to_string(),
+            },
+        )
+        .unwrap();
+        let second = create(
+            &conn,
+            &CreateGroupRequest {
+                name: "second".to_string(),
+                color: "#000000".to_string(),
+            },
+        )
+        .unwrap();
+
+        reorder(&conn, &[second.id.clone(), first.id.clone()]).unwrap();
+        let list = list_all(&conn).unwrap();
+
+        assert_eq!(
+            list.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
+            vec![second.id.as_str(), first.id.as_str(),]
+        );
+        assert_eq!(
+            list.iter().map(|g| g.sort_order).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
     }
 }

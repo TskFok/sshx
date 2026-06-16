@@ -17,6 +17,7 @@ export interface ConnectionInfo {
   keepaliveMax: number;
   createdAt: number;
   updatedAt: number;
+  sortOrder: number;
 }
 
 /** 与后端 `SshClosePayload` 一致 */
@@ -28,6 +29,7 @@ export interface ConnectionGroup {
   id: string;
   name: string;
   color: string;
+  sortOrder: number;
 }
 
 export interface TerminalSession {

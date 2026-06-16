@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Plus,
@@ -15,6 +15,9 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  ChevronDown,
+  ChevronRight,
+  GripVertical,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -49,8 +52,25 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { useAppStore, type ConnectionInfo, type ConnectionGroup } from "@/store";
-import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
+import {
+  canDropConnectionDragPayload,
+  canDropGroupDragPayload,
+  type ConnectionDragPayload,
+  getConnectionAccordionSections,
+  groupConnectionsForDisplay,
+  isConnectionSortingDisabled,
+  moveItemById,
+  readCollapsedGroupIds,
+  reorderConnectionsWithinGroup,
+  writeCollapsedGroupIds,
+} from "@/lib/connectionGroups";
 
 interface ConnectionFormData {
   name: string;
@@ -94,6 +114,14 @@ export function Connections() {
   const [form, setForm] = useState<ConnectionFormData>(emptyForm);
   const [groupForm, setGroupForm] = useState({ name: "", color: "#3b82f6" });
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
+  const [dragOverConnectionId, setDragOverConnectionId] = useState<string | null>(
+    null
+  );
+  const pointerDragCleanupRef = useRef<(() => void) | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
@@ -116,6 +144,17 @@ export function Connections() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const validGroupIds = new Set(groups.map((group) => group.id));
+    const next = readCollapsedGroupIds(window.localStorage, validGroupIds);
+    setCollapsedGroupIds(next);
+    writeCollapsedGroupIds(window.localStorage, next);
+  }, [groups]);
 
   const handleSave = async () => {
     try {
@@ -202,6 +241,186 @@ export function Connections() {
     navigate("/terminal", { state: { connectionId: conn.id } });
   };
 
+  const toggleGroupCollapsed = (groupId: string) => {
+    setCollapsedGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      if (typeof window !== "undefined") {
+        writeCollapsedGroupIds(window.localStorage, next);
+      }
+      return next;
+    });
+  };
+
+  const handleGroupDrop = async (sourceGroupId: string, targetGroupId: string) => {
+    if (sourceGroupId === targetGroupId) {
+      return;
+    }
+
+    const nextGroups = moveItemById(
+      groups,
+      sourceGroupId,
+      targetGroupId,
+      (group) => group.id
+    );
+    if (nextGroups === groups) {
+      return;
+    }
+
+    setGroups(nextGroups);
+    try {
+      await invoke("reorder_groups", {
+        request: { groupIds: nextGroups.map((group) => group.id) },
+      });
+    } catch (err) {
+      console.error("reorder groups error:", err);
+      loadData();
+    }
+  };
+
+  const handleConnectionDrop = async (
+    sourceConnectionId: string,
+    sourceGroupId: string | null,
+    targetConnectionId: string,
+    targetGroupId: string | null
+  ) => {
+    if (sourceConnectionId === targetConnectionId || sourceGroupId !== targetGroupId) {
+      return;
+    }
+
+    const nextConnections = reorderConnectionsWithinGroup(
+      connections,
+      targetGroupId,
+      sourceConnectionId,
+      targetConnectionId
+    );
+    if (nextConnections === connections) {
+      return;
+    }
+
+    setConnections(nextConnections);
+    try {
+      await invoke("reorder_connections", {
+        request: {
+          groupId: targetGroupId,
+          connectionIds: nextConnections
+            .filter((connection) =>
+              targetGroupId === null
+                ? connection.groupId === null
+                : connection.groupId === targetGroupId
+            )
+            .map((connection) => connection.id),
+        },
+      });
+    } catch (err) {
+      console.error("reorder connections error:", err);
+      loadData();
+    }
+  };
+
+  const getGroupDropTargetId = (x: number, y: number): string | null => {
+    const target = document
+      .elementFromPoint(x, y)
+      ?.closest("[data-connection-group-drop-id]") as HTMLElement | null;
+    return target?.dataset.connectionGroupDropId ?? null;
+  };
+
+  const getConnectionDropTarget = (
+    x: number,
+    y: number
+  ): { id: string; groupId: string | null } | null => {
+    const target = document
+      .elementFromPoint(x, y)
+      ?.closest("[data-connection-drop-id]") as HTMLElement | null;
+    const id = target?.dataset.connectionDropId;
+    if (!id) {
+      return null;
+    }
+    const groupId = target.dataset.connectionDropGroupId || null;
+    return { id, groupId };
+  };
+
+  const startPointerDrag = (
+    payload: ConnectionDragPayload,
+    e: React.PointerEvent<HTMLElement>
+  ) => {
+    if (sortingDisabled) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    pointerDragCleanupRef.current?.();
+
+    const handle = e.currentTarget;
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      // Some webviews may not support pointer capture for this element.
+    }
+
+    const updateHover = (event: PointerEvent) => {
+      if (payload.type === "group") {
+        const targetGroupId = getGroupDropTargetId(event.clientX, event.clientY);
+        setDragOverGroupId(
+          targetGroupId && canDropGroupDragPayload(payload, targetGroupId)
+            ? targetGroupId
+            : null
+        );
+        return;
+      }
+
+      const target = getConnectionDropTarget(event.clientX, event.clientY);
+      setDragOverConnectionId(
+        target &&
+          canDropConnectionDragPayload(payload, target.groupId, target.id)
+          ? target.id
+          : null
+      );
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", updateHover);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cleanup);
+      setDragOverGroupId(null);
+      setDragOverConnectionId(null);
+      pointerDragCleanupRef.current = null;
+    };
+
+    const finish = (event: PointerEvent) => {
+      if (payload.type === "group") {
+        const targetGroupId = getGroupDropTargetId(event.clientX, event.clientY);
+        if (targetGroupId && canDropGroupDragPayload(payload, targetGroupId)) {
+          void handleGroupDrop(payload.id, targetGroupId);
+        }
+      } else {
+        const target = getConnectionDropTarget(event.clientX, event.clientY);
+        if (
+          target &&
+          canDropConnectionDragPayload(payload, target.groupId, target.id)
+        ) {
+          void handleConnectionDrop(
+            payload.id,
+            payload.groupId,
+            target.id,
+            target.groupId
+          );
+        }
+      }
+      cleanup();
+    };
+
+    pointerDragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", updateHover);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cleanup);
+  };
+
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
@@ -256,6 +475,11 @@ export function Connections() {
     filteredConnections,
     groups
   );
+  const accordionSections = getConnectionAccordionSections(
+    connectionSections,
+    collapsedGroupIds
+  );
+  const sortingDisabled = isConnectionSortingDisabled(search);
 
   return (
     <div className="space-y-6">
@@ -342,124 +566,200 @@ export function Connections() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-8">
-          {connectionSections.map((section) => (
-            <section key={section.id} className="space-y-3">
-              <div className="flex items-center gap-2">
-                {section.color ? (
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: section.color }}
-                  />
-                ) : (
-                  <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40" />
-                )}
-                <h3 className="text-sm font-semibold">{section.title}</h3>
-                <Badge variant="secondary" className="text-xs">
-                  {section.connections.length}
-                </Badge>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {section.connections.map((conn) => (
-                  <Card
-                    key={conn.id}
-                    className="transition-shadow hover:shadow-md cursor-pointer"
-                    onClick={() => handleConnect(conn)}
+        <Accordion>
+          {accordionSections.map((section) => {
+            const panelId = `connection-group-panel-${section.id}`;
+            const SectionChevron = section.isCollapsed
+              ? ChevronRight
+              : ChevronDown;
+            const sectionGroupId =
+              section.id === "ungrouped" ? null : section.id;
+
+            return (
+              <AccordionItem key={section.id}>
+                <div
+                  data-connection-group-drop-id={section.id}
+                  className={
+                    `flex items-center gap-2 rounded-md ${
+                      dragOverGroupId === section.id
+                        ? "bg-muted/70 ring-1 ring-ring"
+                        : ""
+                    }`
+                  }
+                >
+                  {section.id !== "ungrouped" &&
+                    section.isCollapsed &&
+                    !sortingDisabled && (
+                      <span
+                        role="button"
+                        aria-label={`拖动分组 ${section.title}`}
+                        className="flex h-7 w-7 shrink-0 cursor-grab touch-none select-none items-center justify-center rounded text-muted-foreground hover:bg-muted active:cursor-grabbing"
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) =>
+                          startPointerDrag(
+                            { type: "group", id: section.id },
+                            e
+                          )
+                        }
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </span>
+                    )}
+                  <AccordionTrigger
+                    contentId={panelId}
+                    open={!section.isCollapsed}
+                    onClick={() => toggleGroupCollapsed(section.id)}
+                    className="min-w-0 flex-1"
                   >
-                    <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                          <Server className="h-5 w-5 text-primary" />
-                        </div>
-                        <div className="min-w-0">
-                          <CardTitle className="truncate text-base">
-                            {conn.name}
-                          </CardTitle>
-                          <CardDescription className="truncate text-xs">
-                            {conn.username}@{conn.host}:{conn.port}
-                          </CardDescription>
-                        </div>
-                      </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          asChild
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 shrink-0"
-                          >
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleConnect(conn);
-                            }}
-                          >
-                            <Terminal className="mr-2 h-4 w-4" />
-                            连接
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEdit(conn);
-                            }}
-                          >
-                            <Pencil className="mr-2 h-4 w-4" />
-                            编辑
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(conn.id);
-                            }}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            删除
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-xs">
-                          {conn.authType === "password" ? (
-                            <>
-                              <Lock className="mr-1 h-3 w-3" />
-                              密码
-                            </>
-                          ) : (
-                            <>
-                              <Key className="mr-1 h-3 w-3" />
-                              密钥
-                            </>
+                    <SectionChevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    {section.color ? (
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: section.color }}
+                      />
+                    ) : (
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-muted-foreground/40" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      {section.title}
+                    </span>
+                    <Badge variant="secondary" className="shrink-0 text-xs">
+                      {section.connectionCount}
+                    </Badge>
+                  </AccordionTrigger>
+                </div>
+                <AccordionContent
+                  id={panelId}
+                  open={!section.isCollapsed}
+                  className="grid gap-4 md:grid-cols-2 lg:grid-cols-3"
+                >
+                  {section.visibleConnections.map((conn) => (
+                    <Card
+                      key={conn.id}
+                      data-connection-drop-id={conn.id}
+                      data-connection-drop-group-id={sectionGroupId ?? ""}
+                      className={`transition-shadow hover:shadow-md cursor-pointer ${
+                        dragOverConnectionId === conn.id
+                          ? "ring-2 ring-ring"
+                          : ""
+                      }`}
+                      onClick={() => handleConnect(conn)}
+                    >
+                      <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          {!sortingDisabled && (
+                            <span
+                              role="button"
+                              aria-label={`拖动连接 ${conn.name}`}
+                              className="flex h-8 w-6 shrink-0 cursor-grab touch-none select-none items-center justify-center rounded text-muted-foreground hover:bg-muted active:cursor-grabbing"
+                              onClick={(e) => e.stopPropagation()}
+                              onPointerDown={(e) =>
+                                startPointerDrag(
+                                  {
+                                    type: "connection",
+                                    id: conn.id,
+                                    groupId: sectionGroupId,
+                                  },
+                                  e
+                                )
+                              }
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </span>
                           )}
-                        </Badge>
-                        {section.color && (
-                          <Badge
-                            variant="outline"
-                            className="text-xs"
-                            style={{
-                              borderColor: section.color,
-                              color: section.color,
-                            }}
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                            <Server className="h-5 w-5 text-primary" />
+                          </div>
+                          <div className="min-w-0">
+                            <CardTitle className="truncate text-base">
+                              {conn.name}
+                            </CardTitle>
+                            <CardDescription className="truncate text-xs">
+                              {conn.username}@{conn.host}:{conn.port}
+                            </CardDescription>
+                          </div>
+                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            asChild
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            {section.title}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 shrink-0"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleConnect(conn);
+                              }}
+                            >
+                              <Terminal className="mr-2 h-4 w-4" />
+                              连接
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEdit(conn);
+                              }}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" />
+                              编辑
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(conn.id);
+                              }}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              删除
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="text-xs">
+                            {conn.authType === "password" ? (
+                              <>
+                                <Lock className="mr-1 h-3 w-3" />
+                                密码
+                              </>
+                            ) : (
+                              <>
+                                <Key className="mr-1 h-3 w-3" />
+                                密钥
+                              </>
+                            )}
                           </Badge>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
+                          {section.color && (
+                            <Badge
+                              variant="outline"
+                              className="text-xs"
+                              style={{
+                                borderColor: section.color,
+                                color: section.color,
+                              }}
+                            >
+                              {section.title}
+                            </Badge>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            );
+          })}
+        </Accordion>
       )}
 
       <Dialog

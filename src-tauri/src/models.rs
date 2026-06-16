@@ -29,6 +29,7 @@ pub struct ConnectionInfo {
     pub keepalive_max: u32,
     pub created_at: i64,
     pub updated_at: i64,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +62,7 @@ pub struct ConnectionGroup {
     pub name: String,
     pub color: String,
     pub created_at: i64,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +113,19 @@ pub struct UpdateGroupRequest {
     pub id: String,
     pub name: String,
     pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderGroupsRequest {
+    pub group_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderConnectionsRequest {
+    pub group_id: Option<String>,
+    pub connection_ids: Vec<String>,
 }
 
 fn default_terminal_dynamic_wallpaper_opacity() -> u32 {
