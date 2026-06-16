@@ -26,7 +26,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAppStore, type ConnectionInfo, type SshClosePayload } from "@/store";
+import {
+  useAppStore,
+  type ConnectionGroup,
+  type ConnectionInfo,
+  type SshClosePayload,
+} from "@/store";
+import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
 import {
   clampTerminalScrollbackLines,
   DEFAULT_TERMINAL_SCROLLBACK_LINES,
@@ -48,6 +54,10 @@ import {
 } from "@/lib/symphonyTerminalThemes";
 import { SSHX_SETTINGS_UPDATED_EVENT } from "@/lib/settingsEvents";
 import { shouldCloseTerminalTabOnBarClick } from "@/lib/terminalTabBarClick";
+import {
+  shouldCloseTerminalConnectionPickerOnTerminalPointerDown,
+  TERMINAL_CONNECTION_PICKER_SCROLL_CLASS,
+} from "@/lib/terminalConnectionPicker";
 import { resolveWindowsTerminalClipboardKeyAction } from "@/lib/windowsTerminalClipboard";
 import { cn } from "@/lib/utils";
 
@@ -168,6 +178,8 @@ export function TerminalPage() {
   const navigate = useNavigate();
   const connections = useAppStore((s) => s.connections);
   const setConnections = useAppStore((s) => s.setConnections);
+  const groups = useAppStore((s) => s.groups);
+  const setGroups = useAppStore((s) => s.setGroups);
 
   const isVisible = location.pathname === "/terminal";
 
@@ -196,6 +208,11 @@ export function TerminalPage() {
     () =>
       resolveTerminalColorTheme(terminalColorScheme, parsedDynamicTheme),
     [terminalColorScheme, parsedDynamicTheme]
+  );
+
+  const connectionSections = useMemo(
+    () => groupConnectionsForDisplay(connections, groups),
+    [connections, groups]
   );
 
   const wallpaperAssetSrc = useMemo(() => {
@@ -255,7 +272,10 @@ export function TerminalPage() {
     invoke<ConnectionInfo[]>("list_connections")
       .then(setConnections)
       .catch(() => {});
-  }, [setConnections]);
+    invoke<ConnectionGroup[]>("list_groups")
+      .then(setGroups)
+      .catch(() => {});
+  }, [setConnections, setGroups]);
 
   const refreshTerminalSessionSettings = useCallback(async () => {
     try {
@@ -1018,27 +1038,69 @@ export function TerminalPage() {
       {showPicker && (
         <div className="border-b bg-background p-4">
           <p className="text-sm font-medium mb-3">选择要连接的主机：</p>
-          <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-4">
-            {connections.map((conn) => (
-              <button
-                key={conn.id}
-                className="flex items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted"
-                onClick={() => connectToHost(conn.id)}
-              >
-                <Server className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">{conn.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {conn.host}:{conn.port}
-                  </p>
-                </div>
-              </button>
-            ))}
+          <div className={TERMINAL_CONNECTION_PICKER_SCROLL_CLASS}>
+            {connectionSections.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                还没有已保存的连接，请先前往连接管理页面添加。
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {connectionSections.map((section) => (
+                  <section key={section.id} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      {section.color ? (
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: section.color }}
+                        />
+                      ) : (
+                        <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40" />
+                      )}
+                      <h3 className="text-xs font-semibold text-muted-foreground">
+                        {section.title}
+                      </h3>
+                      <span className="text-xs text-muted-foreground">
+                        {section.connections.length}
+                      </span>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-4">
+                      {section.connections.map((conn) => (
+                        <button
+                          key={conn.id}
+                          className="flex min-w-0 items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted"
+                          onClick={() => connectToHost(conn.id)}
+                        >
+                          <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">
+                              {conn.name}
+                            </p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {conn.host}:{conn.port}
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      <div className={cn("relative flex-1", showEmptyState && "hidden")} style={{ minHeight: 0 }}>
+      <div
+        className={cn("relative flex-1", showEmptyState && "hidden")}
+        style={{ minHeight: 0 }}
+        onMouseDown={() => {
+          if (
+            shouldCloseTerminalConnectionPickerOnTerminalPointerDown(showPicker)
+          ) {
+            setShowPicker(false);
+          }
+        }}
+      >
         <div
           ref={wrapperRef}
           className="absolute inset-0 overflow-x-auto overflow-y-hidden overscroll-none"

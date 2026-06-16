@@ -50,6 +50,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAppStore, type ConnectionInfo, type ConnectionGroup } from "@/store";
+import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
 
 interface ConnectionFormData {
   name: string;
@@ -251,6 +252,10 @@ export function Connections() {
     const matchesGroup = !selectedGroup || c.groupId === selectedGroup;
     return matchesSearch && matchesGroup;
   });
+  const connectionSections = groupConnectionsForDisplay(
+    filteredConnections,
+    groups
+  );
 
   return (
     <div className="space-y-6">
@@ -337,100 +342,123 @@ export function Connections() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredConnections.map((conn) => {
-            const group = groups.find((g) => g.id === conn.groupId);
-            return (
-              <Card
-                key={conn.id}
-                className="transition-shadow hover:shadow-md cursor-pointer"
-                onClick={() => handleConnect(conn)}
-              >
-                <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                      <Server className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-base">{conn.name}</CardTitle>
-                      <CardDescription className="text-xs">
-                        {conn.username}@{conn.host}:{conn.port}
-                      </CardDescription>
-                    </div>
-                  </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      asChild
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleConnect(conn);
-                        }}
-                      >
-                        <Terminal className="mr-2 h-4 w-4" />
-                        连接
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleEdit(conn);
-                        }}
-                      >
-                        <Pencil className="mr-2 h-4 w-4" />
-                        编辑
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(conn.id);
-                        }}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        删除
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className="text-xs">
-                      {conn.authType === "password" ? (
-                        <>
-                          <Lock className="mr-1 h-3 w-3" />
-                          密码
-                        </>
-                      ) : (
-                        <>
-                          <Key className="mr-1 h-3 w-3" />
-                          密钥
-                        </>
-                      )}
-                    </Badge>
-                    {group && (
-                      <Badge
-                        variant="outline"
-                        className="text-xs"
-                        style={{
-                          borderColor: group.color,
-                          color: group.color,
-                        }}
-                      >
-                        {group.name}
-                      </Badge>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className="space-y-8">
+          {connectionSections.map((section) => (
+            <section key={section.id} className="space-y-3">
+              <div className="flex items-center gap-2">
+                {section.color ? (
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: section.color }}
+                  />
+                ) : (
+                  <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40" />
+                )}
+                <h3 className="text-sm font-semibold">{section.title}</h3>
+                <Badge variant="secondary" className="text-xs">
+                  {section.connections.length}
+                </Badge>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {section.connections.map((conn) => (
+                  <Card
+                    key={conn.id}
+                    className="transition-shadow hover:shadow-md cursor-pointer"
+                    onClick={() => handleConnect(conn)}
+                  >
+                    <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                          <Server className="h-5 w-5 text-primary" />
+                        </div>
+                        <div className="min-w-0">
+                          <CardTitle className="truncate text-base">
+                            {conn.name}
+                          </CardTitle>
+                          <CardDescription className="truncate text-xs">
+                            {conn.username}@{conn.host}:{conn.port}
+                          </CardDescription>
+                        </div>
+                      </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          asChild
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleConnect(conn);
+                            }}
+                          >
+                            <Terminal className="mr-2 h-4 w-4" />
+                            连接
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEdit(conn);
+                            }}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" />
+                            编辑
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(conn.id);
+                            }}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            删除
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className="text-xs">
+                          {conn.authType === "password" ? (
+                            <>
+                              <Lock className="mr-1 h-3 w-3" />
+                              密码
+                            </>
+                          ) : (
+                            <>
+                              <Key className="mr-1 h-3 w-3" />
+                              密钥
+                            </>
+                          )}
+                        </Badge>
+                        {section.color && (
+                          <Badge
+                            variant="outline"
+                            className="text-xs"
+                            style={{
+                              borderColor: section.color,
+                              color: section.color,
+                            }}
+                          >
+                            {section.title}
+                          </Badge>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          ))}
         </div>
       )}
 
