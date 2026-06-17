@@ -139,6 +139,31 @@ pub struct ReorderConnectionsRequest {
     pub connection_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionExportFile {
+    pub version: u32,
+    pub exported_at: i64,
+    pub groups: Vec<ConnectionGroup>,
+    pub connections: Vec<ConnectionInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportConnectionsResult {
+    pub exported_groups: usize,
+    pub exported_connections: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportConnectionsResult {
+    pub imported_groups: usize,
+    pub skipped_groups: usize,
+    pub imported_connections: usize,
+    pub skipped_connections: usize,
+}
+
 fn default_terminal_dynamic_wallpaper_opacity() -> u32 {
     40
 }

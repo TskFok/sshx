@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   Plus,
   Search,
@@ -19,6 +20,8 @@ import {
   ChevronRight,
   GripVertical,
   Star,
+  Download,
+  Upload,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -89,6 +92,18 @@ interface ConnectionFormData {
   isImportant: boolean;
 }
 
+interface ExportConnectionsResult {
+  exportedGroups: number;
+  exportedConnections: number;
+}
+
+interface ImportConnectionsResult {
+  importedGroups: number;
+  skippedGroups: number;
+  importedConnections: number;
+  skippedConnections: number;
+}
+
 const emptyForm: ConnectionFormData = {
   name: "",
   host: "",
@@ -125,6 +140,12 @@ export function Connections() {
   const [dragOverConnectionId, setDragOverConnectionId] = useState<string | null>(
     null
   );
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [transferMessage, setTransferMessage] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   const pointerDragCleanupRef = useRef<(() => void) | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -246,6 +267,67 @@ export function Connections() {
 
   const handleConnect = (conn: ConnectionInfo) => {
     navigate("/terminal", { state: { connectionId: conn.id } });
+  };
+
+  const handleExportConnections = async () => {
+    setTransferMessage(null);
+    const path = await save({
+      defaultPath: `sshx-connections-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "SSHX 连接备份", extensions: ["json"] }],
+    });
+    if (!path) {
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const result = await invoke<ExportConnectionsResult>(
+        "export_connections_file",
+        { path }
+      );
+      setTransferMessage({
+        ok: true,
+        text: `已导出 ${result.exportedConnections} 个连接、${result.exportedGroups} 个分组`,
+      });
+    } catch (err) {
+      setTransferMessage({
+        ok: false,
+        text: typeof err === "string" ? err : String(err),
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleImportConnections = async () => {
+    setTransferMessage(null);
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "SSHX 连接备份", extensions: ["json"] }],
+    });
+    if (typeof path !== "string") {
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const result = await invoke<ImportConnectionsResult>(
+        "import_connections_file",
+        { path }
+      );
+      setTransferMessage({
+        ok: true,
+        text: `已导入 ${result.importedConnections} 个连接、${result.importedGroups} 个分组；跳过 ${result.skippedConnections} 个连接、${result.skippedGroups} 个分组`,
+      });
+      await loadData();
+    } catch (err) {
+      setTransferMessage({
+        ok: false,
+        text: typeof err === "string" ? err : String(err),
+      });
+    } finally {
+      setImporting(false);
+    }
   };
 
   const handleToggleImportant = async (conn: ConnectionInfo) => {
@@ -532,12 +614,36 @@ export function Connections() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">连接管理</h2>
           <p className="text-muted-foreground">管理你的 SSH 连接和分组</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={handleExportConnections}
+            disabled={exporting || importing}
+          >
+            {exporting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
+            导出
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleImportConnections}
+            disabled={exporting || importing}
+          >
+            {importing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="mr-2 h-4 w-4" />
+            )}
+            导入
+          </Button>
           <Button
             variant="outline"
             onClick={() => setGroupDialogOpen(true)}
@@ -593,6 +699,23 @@ export function Connections() {
           </Select>
         )}
       </div>
+
+      {transferMessage && (
+        <div
+          className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
+            transferMessage.ok
+              ? "bg-green-500/10 text-green-600 dark:text-green-400"
+              : "bg-destructive/10 text-destructive"
+          }`}
+        >
+          {transferMessage.ok ? (
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+          ) : (
+            <XCircle className="h-4 w-4 shrink-0" />
+          )}
+          <span className="break-all">{transferMessage.text}</span>
+        </div>
+      )}
 
       {filteredConnections.length === 0 ? (
         <Card>

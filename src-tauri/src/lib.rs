@@ -30,6 +30,8 @@ pub fn run() {
             connection::create_connection,
             connection::update_connection,
             connection::reorder_connections,
+            connection::export_connections_file,
+            connection::import_connections_file,
             connection::delete_connection,
             connection::list_groups,
             connection::create_group,

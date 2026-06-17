@@ -46,6 +46,35 @@ pub fn reorder_connections(
 }
 
 #[tauri::command]
+pub fn export_connections_file(
+    db: State<'_, Database>,
+    path: String,
+) -> Result<ExportConnectionsResult, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let export = db::connection::export_all(&conn).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&export).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(ExportConnectionsResult {
+        exported_groups: export.groups.len(),
+        exported_connections: export.connections.len(),
+    })
+}
+
+#[tauri::command]
+pub fn import_connections_file(
+    db: State<'_, Database>,
+    path: String,
+) -> Result<ImportConnectionsResult, String> {
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let file: ConnectionExportFile = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    if file.version != 1 {
+        return Err(format!("不支持的连接备份版本: {}", file.version));
+    }
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    db::connection::import_all(&conn, &file).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn delete_connection(db: State<'_, Database>, id: String) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     db::connection::delete(&conn, &id).map_err(|e| e.to_string())

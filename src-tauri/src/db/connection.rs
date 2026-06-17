@@ -1,6 +1,10 @@
-use crate::models::{AuthType, ConnectionInfo, CreateConnectionRequest, UpdateConnectionRequest};
+use crate::db::group;
+use crate::models::{
+    AuthType, ConnectionExportFile, ConnectionInfo, CreateConnectionRequest,
+    ImportConnectionsResult, UpdateConnectionRequest,
+};
 use rusqlite::{params, Connection};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -233,12 +237,203 @@ pub fn reorder(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConnectionDuplicateKey {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    auth_type: String,
+    password: Option<String>,
+    private_key: Option<String>,
+    private_key_passphrase: Option<String>,
+    group_name: Option<String>,
+    keepalive_interval_secs: u32,
+    keepalive_max: u32,
+    is_important: bool,
+}
+
+fn connection_duplicate_key(
+    connection: &ConnectionInfo,
+    group_name: Option<String>,
+) -> ConnectionDuplicateKey {
+    ConnectionDuplicateKey {
+        name: connection.name.clone(),
+        host: connection.host.clone(),
+        port: connection.port,
+        username: connection.username.clone(),
+        auth_type: connection.auth_type.as_str().to_string(),
+        password: connection.password.clone(),
+        private_key: connection.private_key.clone(),
+        private_key_passphrase: connection.private_key_passphrase.clone(),
+        group_name,
+        keepalive_interval_secs: connection.keepalive_interval_secs,
+        keepalive_max: connection.keepalive_max,
+        is_important: connection.is_important,
+    }
+}
+
+pub fn export_all(conn: &Connection) -> Result<ConnectionExportFile, rusqlite::Error> {
+    Ok(ConnectionExportFile {
+        version: 1,
+        exported_at: now_timestamp(),
+        groups: group::list_all(conn)?,
+        connections: list_all(conn)?,
+    })
+}
+
+pub fn import_all(
+    conn: &Connection,
+    file: &ConnectionExportFile,
+) -> Result<ImportConnectionsResult, rusqlite::Error> {
+    let existing_groups = group::list_all(conn)?;
+    let existing_connections = list_all(conn)?;
+
+    let mut group_id_by_import_id = HashMap::<String, String>::new();
+    let mut group_id_by_name = existing_groups
+        .iter()
+        .map(|group| (group.name.clone(), group.id.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut group_name_by_id = existing_groups
+        .iter()
+        .map(|group| (group.id.clone(), group.name.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut next_group_sort_order = existing_groups
+        .iter()
+        .map(|group| group.sort_order)
+        .max()
+        .map_or(0, |max| max + 1);
+
+    let mut next_connection_sort_order_by_group = HashMap::<Option<String>, i64>::new();
+    for connection in &existing_connections {
+        let key = connection.group_id.clone();
+        let next = connection.sort_order + 1;
+        next_connection_sort_order_by_group
+            .entry(key)
+            .and_modify(|current| *current = (*current).max(next))
+            .or_insert(next);
+    }
+
+    let mut existing_connection_keys = existing_connections
+        .iter()
+        .map(|connection| {
+            let group_name = connection
+                .group_id
+                .as_ref()
+                .and_then(|id| group_name_by_id.get(id))
+                .cloned();
+            connection_duplicate_key(connection, group_name)
+        })
+        .collect::<HashSet<_>>();
+
+    conn.execute("BEGIN IMMEDIATE TRANSACTION", [])?;
+
+    let result = (|| {
+        let mut summary = ImportConnectionsResult {
+            imported_groups: 0,
+            skipped_groups: 0,
+            imported_connections: 0,
+            skipped_connections: 0,
+        };
+
+        for imported_group in &file.groups {
+            if let Some(existing_id) = group_id_by_name.get(&imported_group.name) {
+                group_id_by_import_id.insert(imported_group.id.clone(), existing_id.clone());
+                summary.skipped_groups += 1;
+                continue;
+            }
+
+            let new_id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO connection_groups (id, name, color, created_at, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    new_id,
+                    imported_group.name,
+                    imported_group.color,
+                    now_timestamp(),
+                    next_group_sort_order,
+                ],
+            )?;
+            group_id_by_import_id.insert(imported_group.id.clone(), new_id.clone());
+            group_id_by_name.insert(imported_group.name.clone(), new_id.clone());
+            group_name_by_id.insert(new_id, imported_group.name.clone());
+            next_group_sort_order += 1;
+            summary.imported_groups += 1;
+        }
+
+        for imported_connection in &file.connections {
+            let mapped_group_id = imported_connection
+                .group_id
+                .as_ref()
+                .and_then(|id| group_id_by_import_id.get(id))
+                .cloned();
+            let mapped_group_name = mapped_group_id
+                .as_ref()
+                .and_then(|id| group_name_by_id.get(id))
+                .cloned();
+            let duplicate_key = connection_duplicate_key(imported_connection, mapped_group_name);
+
+            if existing_connection_keys.contains(&duplicate_key) {
+                summary.skipped_connections += 1;
+                continue;
+            }
+
+            let new_id = Uuid::new_v4().to_string();
+            let now = now_timestamp();
+            let sort_order_entry = next_connection_sort_order_by_group
+                .entry(mapped_group_id.clone())
+                .or_insert(0);
+            let sort_order = *sort_order_entry;
+            *sort_order_entry += 1;
+            conn.execute(
+                "INSERT INTO connections (id, name, host, port, username, auth_type, password, \
+                 private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
+                 created_at, updated_at, sort_order) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                params![
+                    new_id,
+                    imported_connection.name,
+                    imported_connection.host,
+                    imported_connection.port,
+                    imported_connection.username,
+                    imported_connection.auth_type.as_str(),
+                    imported_connection.password,
+                    imported_connection.private_key,
+                    imported_connection.private_key_passphrase,
+                    mapped_group_id,
+                    imported_connection.keepalive_interval_secs as i64,
+                    imported_connection.keepalive_max as i64,
+                    if imported_connection.is_important { 1_i64 } else { 0_i64 },
+                    now,
+                    now,
+                    sort_order,
+                ],
+            )?;
+            existing_connection_keys.insert(duplicate_key);
+            summary.imported_connections += 1;
+        }
+
+        Ok::<ImportConnectionsResult, rusqlite::Error>(summary)
+    })();
+
+    match result {
+        Ok(summary) => {
+            conn.execute("COMMIT", [])?;
+            Ok(summary)
+        }
+        Err(err) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(err)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::create_test_db;
-    use crate::db::group;
-    use crate::models::CreateGroupRequest;
+    use crate::models::{ConnectionExportFile, CreateGroupRequest};
 
     fn create_group(conn: &Connection, name: &str) -> String {
         group::create(
@@ -276,6 +471,149 @@ mod tests {
         let list = list_all(&conn).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_export_all_includes_groups_and_connections() {
+        let conn = create_test_db();
+        let group_id = create_group(&conn, "prod");
+        create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "prod-a".to_string(),
+                host: "10.0.0.1".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: Some("secret".to_string()),
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(group_id),
+                keepalive_interval_secs: 45,
+                keepalive_max: 4,
+                is_important: true,
+            },
+        )
+        .unwrap();
+
+        let export = export_all(&conn).unwrap();
+
+        assert_eq!(export.version, 1);
+        assert_eq!(export.groups.len(), 1);
+        assert_eq!(export.groups[0].name, "prod");
+        assert_eq!(export.connections.len(), 1);
+        assert_eq!(export.connections[0].name, "prod-a");
+        assert_eq!(export.connections[0].password.as_deref(), Some("secret"));
+        assert!(export.connections[0].is_important);
+    }
+
+    #[test]
+    fn test_import_all_skips_existing_connection_and_maps_same_name_group() {
+        let conn = create_test_db();
+        let existing_group_id = create_group(&conn, "prod");
+        create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "prod-a".to_string(),
+                host: "10.0.0.1".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_type: AuthType::Password,
+                password: Some("secret".to_string()),
+                private_key: None,
+                private_key_passphrase: None,
+                group_id: Some(existing_group_id.clone()),
+                keepalive_interval_secs: 45,
+                keepalive_max: 4,
+                is_important: true,
+            },
+        )
+        .unwrap();
+
+        let imported = ConnectionExportFile {
+            version: 1,
+            exported_at: 123,
+            groups: vec![
+                crate::models::ConnectionGroup {
+                    id: "import-prod".to_string(),
+                    name: "prod".to_string(),
+                    color: "#ef4444".to_string(),
+                    created_at: 10,
+                    sort_order: 0,
+                },
+                crate::models::ConnectionGroup {
+                    id: "import-stage".to_string(),
+                    name: "stage".to_string(),
+                    color: "#22c55e".to_string(),
+                    created_at: 11,
+                    sort_order: 1,
+                },
+            ],
+            connections: vec![
+                ConnectionInfo {
+                    id: "import-duplicate".to_string(),
+                    name: "prod-a".to_string(),
+                    host: "10.0.0.1".to_string(),
+                    port: 22,
+                    username: "root".to_string(),
+                    auth_type: AuthType::Password,
+                    password: Some("secret".to_string()),
+                    private_key: None,
+                    private_key_passphrase: None,
+                    group_id: Some("import-prod".to_string()),
+                    keepalive_interval_secs: 45,
+                    keepalive_max: 4,
+                    is_important: true,
+                    created_at: 12,
+                    updated_at: 13,
+                    sort_order: 0,
+                },
+                ConnectionInfo {
+                    id: "import-new".to_string(),
+                    name: "stage-a".to_string(),
+                    host: "10.0.1.1".to_string(),
+                    port: 2222,
+                    username: "deploy".to_string(),
+                    auth_type: AuthType::Key,
+                    password: None,
+                    private_key: Some("~/.ssh/id_ed25519".to_string()),
+                    private_key_passphrase: Some("key-pass".to_string()),
+                    group_id: Some("import-stage".to_string()),
+                    keepalive_interval_secs: 30,
+                    keepalive_max: 3,
+                    is_important: false,
+                    created_at: 14,
+                    updated_at: 15,
+                    sort_order: 1,
+                },
+            ],
+        };
+
+        let result = import_all(&conn, &imported).unwrap();
+
+        assert_eq!(result.imported_groups, 1);
+        assert_eq!(result.skipped_groups, 1);
+        assert_eq!(result.imported_connections, 1);
+        assert_eq!(result.skipped_connections, 1);
+
+        let groups = group::list_all(&conn).unwrap();
+        let stage_group_id = groups
+            .iter()
+            .find(|group| group.name == "stage")
+            .unwrap()
+            .id
+            .clone();
+        let list = list_all(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        let imported_new = list.iter().find(|item| item.name == "stage-a").unwrap();
+        assert_eq!(
+            imported_new.group_id.as_deref(),
+            Some(stage_group_id.as_str())
+        );
+        assert_eq!(
+            imported_new.private_key.as_deref(),
+            Some("~/.ssh/id_ed25519")
+        );
     }
 
     #[test]
