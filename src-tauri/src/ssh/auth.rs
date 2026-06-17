@@ -9,6 +9,7 @@ pub enum AuthError {
     #[error("authentication failed: {0}")]
     Failed(String),
     #[error("invalid key: {0}")]
+    #[cfg(not(target_os = "macos"))]
     InvalidKey(String),
     #[error("failed to read key file: {0}")]
     FileReadError(String),

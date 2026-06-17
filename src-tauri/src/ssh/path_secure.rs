@@ -43,12 +43,14 @@ pub fn parse_ls_1ap(listing: &str) -> Vec<RemoteFileEntry> {
 }
 
 /// 将路径放在 POSIX 单引号内，供 `sh -c` 拼接命令使用。
+#[cfg(any(test, not(target_os = "macos")))]
 pub fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
 /// 将已规范化的远程基路径与相对片段拼接为远程文件路径。
 /// `relative` 不得为空、不得以 `/` 开头、路径段中不得出现 `..`。
+#[cfg(any(test, not(target_os = "macos")))]
 pub fn join_remote_relative(base_canonical: &str, relative: &str) -> Result<String, String> {
     let rel = relative.trim();
     if rel.is_empty() {
@@ -75,6 +77,7 @@ pub fn join_remote_relative(base_canonical: &str, relative: &str) -> Result<Stri
 }
 
 /// `path_canonical` 是否在 `base_canonical` 目录树下（含相等）。
+#[cfg(any(test, not(target_os = "macos")))]
 pub fn is_subpath(base_canonical: &str, path_canonical: &str) -> bool {
     let b = base_canonical.trim().trim_end_matches('/');
     let p = path_canonical.trim().trim_end_matches('/');
@@ -151,6 +154,11 @@ mod tests {
     #[test]
     fn validate_relative_accepts_nested() {
         assert!(validate_remote_relative("dir/file").is_ok());
+    }
+
+    #[test]
+    fn single_quote_escapes_embedded_quotes() {
+        assert_eq!(sh_single_quote("a'b"), "'a'\"'\"'b'");
     }
 
     #[test]

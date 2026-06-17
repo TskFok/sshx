@@ -16,7 +16,6 @@ const SCAN_MAX: usize = 65536;
 
 pub struct SshSession {
     pub id: String,
-    pub connection_id: String,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
     /// OpenSSH 多路复用控制套接字（用于 `sftp` 复用已认证连接）。
@@ -171,7 +170,7 @@ pub async fn connect_openssh(
     app: AppHandle,
     auth_prompts: &AuthPromptManager,
     session_id: &str,
-    connection_id: String,
+    _connection_id: String,
     host: &str,
     port: u16,
     username: &str,
@@ -308,7 +307,6 @@ pub async fn connect_openssh(
 
     Ok(SshSession {
         id: session_id.to_string(),
-        connection_id,
         cmd_tx,
         child,
         control_path,

@@ -38,11 +38,6 @@ impl SessionManager {
         sessions.keys().cloned().collect()
     }
 
-    pub async fn has_session(&self, id: &str) -> bool {
-        let sessions = self.sessions.lock().await;
-        sessions.contains_key(id)
-    }
-
     #[cfg(not(target_os = "macos"))]
     pub async fn sftp_upload(
         &self,
