@@ -21,6 +21,7 @@ node_modules/
 dist/
 .vite/
 *.tsbuildinfo
+.superpowers/
 
 # ---- IDE ----
 .idea/

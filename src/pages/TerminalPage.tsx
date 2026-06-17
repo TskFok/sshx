@@ -6,7 +6,16 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Plus, X, Server, Upload, Download, File, Folder } from "lucide-react";
+import {
+  Plus,
+  X,
+  Server,
+  Upload,
+  Download,
+  File,
+  Folder,
+  Star,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,6 +64,7 @@ import {
 import { SSHX_SETTINGS_UPDATED_EVENT } from "@/lib/settingsEvents";
 import { shouldCloseTerminalTabOnBarClick } from "@/lib/terminalTabBarClick";
 import {
+  getTerminalConnectionPickerCardState,
   shouldCloseTerminalConnectionPickerOnTerminalPointerDown,
   TERMINAL_CONNECTION_PICKER_SCROLL_CLASS,
 } from "@/lib/terminalConnectionPicker";
@@ -1064,23 +1074,48 @@ export function TerminalPage() {
                       </span>
                     </div>
                     <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-4">
-                      {section.connections.map((conn) => (
-                        <button
-                          key={conn.id}
-                          className="flex min-w-0 items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted"
-                          onClick={() => connectToHost(conn.id)}
-                        >
-                          <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">
-                              {conn.name}
-                            </p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              {conn.host}:{conn.port}
-                            </p>
-                          </div>
-                        </button>
-                      ))}
+                      {section.connections.map((conn) => {
+                        const cardState = getTerminalConnectionPickerCardState(
+                          conn.isImportant
+                        );
+                        return (
+                          <button
+                            key={conn.id}
+                            className={cn(
+                              "flex min-w-0 items-center gap-3 rounded-lg p-3 text-left transition-colors",
+                              cardState.cardClassName
+                            )}
+                            onClick={() => connectToHost(conn.id)}
+                          >
+                            <span
+                              className={cn(
+                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
+                                cardState.iconWrapClassName
+                              )}
+                            >
+                              <Server
+                                className={cn("h-4 w-4", cardState.iconClassName)}
+                              />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <p className="min-w-0 truncate text-sm font-medium">
+                                  {conn.name}
+                                </p>
+                                {cardState.badgeLabel && (
+                                  <span className="inline-flex shrink-0 items-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">
+                                    <Star className="mr-0.5 h-2.5 w-2.5 fill-current" />
+                                    {cardState.badgeLabel}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="truncate text-xs text-muted-foreground">
+                                {conn.host}:{conn.port}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   </section>
                 ))}

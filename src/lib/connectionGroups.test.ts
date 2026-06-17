@@ -30,6 +30,7 @@ const makeConnection = (
   groupId,
   keepaliveIntervalSecs: 30,
   keepaliveMax: 3,
+  isImportant: false,
   createdAt: 1,
   updatedAt: 1,
   sortOrder: 1,

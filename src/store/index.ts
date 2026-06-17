@@ -15,6 +15,8 @@ export interface ConnectionInfo {
   keepaliveIntervalSecs: number;
   /** 未收到对端数据时连续 keepalive 次数上限，达到后断开 */
   keepaliveMax: number;
+  /** 是否为重点连接，用于连接列表高亮边框 */
+  isImportant: boolean;
   createdAt: number;
   updatedAt: number;
   sortOrder: number;

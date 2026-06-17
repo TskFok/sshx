@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  Star,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -71,6 +72,7 @@ import {
   reorderConnectionsWithinGroup,
   writeCollapsedGroupIds,
 } from "@/lib/connectionGroups";
+import { cn } from "@/lib/utils";
 
 interface ConnectionFormData {
   name: string;
@@ -84,6 +86,7 @@ interface ConnectionFormData {
   groupId: string | null;
   keepaliveIntervalSecs: number;
   keepaliveMax: number;
+  isImportant: boolean;
 }
 
 const emptyForm: ConnectionFormData = {
@@ -98,6 +101,7 @@ const emptyForm: ConnectionFormData = {
   groupId: null,
   keepaliveIntervalSecs: 30,
   keepaliveMax: 3,
+  isImportant: false,
 };
 
 export function Connections() {
@@ -174,6 +178,7 @@ export function Connections() {
             groupId: form.groupId,
             keepaliveIntervalSecs: form.keepaliveIntervalSecs,
             keepaliveMax: form.keepaliveMax,
+            isImportant: form.isImportant,
           },
         });
       } else {
@@ -191,6 +196,7 @@ export function Connections() {
             groupId: form.groupId,
             keepaliveIntervalSecs: form.keepaliveIntervalSecs,
             keepaliveMax: form.keepaliveMax,
+            isImportant: form.isImportant,
           },
         });
       }
@@ -224,6 +230,7 @@ export function Connections() {
       groupId: fullConn.groupId,
       keepaliveIntervalSecs: fullConn.keepaliveIntervalSecs ?? 30,
       keepaliveMax: fullConn.keepaliveMax ?? 3,
+      isImportant: fullConn.isImportant ?? false,
     });
     setDialogOpen(true);
   };
@@ -239,6 +246,48 @@ export function Connections() {
 
   const handleConnect = (conn: ConnectionInfo) => {
     navigate("/terminal", { state: { connectionId: conn.id } });
+  };
+
+  const handleToggleImportant = async (conn: ConnectionInfo) => {
+    try {
+      let fullConn = conn;
+      try {
+        const detail = await invoke<ConnectionInfo>("get_connection", { id: conn.id });
+        if (detail) fullConn = detail;
+      } catch {
+        // fall back to list data
+      }
+      await invoke("update_connection", {
+        request: {
+          id: fullConn.id,
+          name: fullConn.name,
+          host: fullConn.host,
+          port: fullConn.port,
+          username: fullConn.username,
+          authType: fullConn.authType,
+          password: fullConn.authType === "password" ? fullConn.password ?? null : null,
+          privateKey: fullConn.authType === "key" ? fullConn.privateKey ?? null : null,
+          privateKeyPassphrase:
+            fullConn.authType === "key"
+              ? fullConn.privateKeyPassphrase ?? null
+              : null,
+          groupId: fullConn.groupId,
+          keepaliveIntervalSecs: fullConn.keepaliveIntervalSecs ?? 30,
+          keepaliveMax: fullConn.keepaliveMax ?? 3,
+          isImportant: !(fullConn.isImportant ?? false),
+        },
+      });
+      setConnections(
+        connections.map((item) =>
+          item.id === conn.id
+            ? { ...item, isImportant: !(fullConn.isImportant ?? false) }
+            : item
+        )
+      );
+    } catch (err) {
+      console.error("toggle important error:", err);
+      loadData();
+    }
   };
 
   const toggleGroupCollapsed = (groupId: string) => {
@@ -638,11 +687,13 @@ export function Connections() {
                       key={conn.id}
                       data-connection-drop-id={conn.id}
                       data-connection-drop-group-id={sectionGroupId ?? ""}
-                      className={`transition-shadow hover:shadow-md cursor-pointer ${
-                        dragOverConnectionId === conn.id
-                          ? "ring-2 ring-ring"
-                          : ""
-                      }`}
+                      className={cn(
+                        "cursor-pointer transition-shadow",
+                        conn.isImportant
+                          ? "border-2 border-amber-500 shadow-[0_0_0_3px_rgba(245,158,11,0.12)] hover:shadow-[0_0_0_3px_rgba(245,158,11,0.16),0_4px_12px_rgba(15,23,42,0.12)]"
+                          : "hover:shadow-md",
+                        dragOverConnectionId === conn.id && "ring-2 ring-ring"
+                      )}
                       onClick={() => handleConnect(conn)}
                     >
                       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
@@ -667,8 +718,18 @@ export function Connections() {
                               <GripVertical className="h-4 w-4" />
                             </span>
                           )}
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                            <Server className="h-5 w-5 text-primary" />
+                          <div
+                            className={cn(
+                              "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+                              conn.isImportant ? "bg-amber-100" : "bg-primary/10"
+                            )}
+                          >
+                            <Server
+                              className={cn(
+                                "h-5 w-5",
+                                conn.isImportant ? "text-amber-700" : "text-primary"
+                              )}
+                            />
                           </div>
                           <div className="min-w-0">
                             <CardTitle className="truncate text-base">
@@ -679,53 +740,97 @@ export function Connections() {
                             </CardDescription>
                           </div>
                         </div>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            asChild
-                            onClick={(e) => e.stopPropagation()}
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label={
+                              conn.isImportant
+                                ? `取消重点标记 ${conn.name}`
+                                : `添加重点标记 ${conn.name}`
+                            }
+                            className={cn(
+                              "h-8 w-8",
+                              conn.isImportant
+                                ? "bg-amber-500 text-white hover:bg-amber-600 hover:text-white"
+                                : "text-muted-foreground hover:text-amber-600"
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleImportant(conn);
+                            }}
                           >
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 shrink-0"
+                            <Star
+                              className={cn(
+                                "h-4 w-4",
+                                conn.isImportant && "fill-current"
+                              )}
+                            />
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              asChild
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleConnect(conn);
-                              }}
-                            >
-                              <Terminal className="mr-2 h-4 w-4" />
-                              连接
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEdit(conn);
-                              }}
-                            >
-                              <Pencil className="mr-2 h-4 w-4" />
-                              编辑
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDelete(conn.id);
-                              }}
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              删除
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                              >
+                                <MoreVertical className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleConnect(conn);
+                                }}
+                              >
+                                <Terminal className="mr-2 h-4 w-4" />
+                                连接
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleImportant(conn);
+                                }}
+                              >
+                                <Star className="mr-2 h-4 w-4" />
+                                {conn.isImportant ? "取消重点" : "标为重点"}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEdit(conn);
+                                }}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />
+                                编辑
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(conn.id);
+                                }}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                删除
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
                       </CardHeader>
                       <CardContent className="pt-0">
                         <div className="flex items-center gap-2">
+                          {conn.isImportant && (
+                            <Badge className="bg-amber-500 text-xs text-white hover:bg-amber-500">
+                              <Star className="mr-1 h-3 w-3 fill-current" />
+                              重点
+                            </Badge>
+                          )}
                           <Badge variant="secondary" className="text-xs">
                             {conn.authType === "password" ? (
                               <>
@@ -812,6 +917,49 @@ export function Connections() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 text-left"
+                onClick={() =>
+                  setForm({ ...form, isImportant: !form.isImportant })
+                }
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
+                      form.isImportant
+                        ? "bg-amber-500 text-white"
+                        : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    <Star
+                      className={cn("h-4 w-4", form.isImportant && "fill-current")}
+                    />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">重点连接</span>
+                    <span className="block text-xs text-muted-foreground">
+                      开启后连接卡片会使用琥珀色边框突出显示
+                    </span>
+                  </span>
+                </span>
+                <span
+                  className={cn(
+                    "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                    form.isImportant ? "bg-amber-500" : "bg-muted"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "block h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                      form.isImportant && "translate-x-4"
+                    )}
+                  />
+                </span>
+              </button>
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div className="col-span-2 space-y-2">

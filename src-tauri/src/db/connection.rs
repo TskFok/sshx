@@ -14,7 +14,7 @@ fn now_timestamp() -> i64 {
 pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, auth_type, password, private_key, \
-         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
+         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
          created_at, updated_at, sort_order \
          FROM connections ORDER BY sort_order ASC, updated_at DESC",
     )?;
@@ -33,9 +33,10 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
             group_id: row.get(9)?,
             keepalive_interval_secs: row.get::<_, i64>(10)? as u32,
             keepalive_max: row.get::<_, i64>(11)? as u32,
-            created_at: row.get(12)?,
-            updated_at: row.get(13)?,
-            sort_order: row.get(14)?,
+            is_important: row.get::<_, i64>(12)? != 0,
+            created_at: row.get(13)?,
+            updated_at: row.get(14)?,
+            sort_order: row.get(15)?,
         })
     })?;
 
@@ -45,7 +46,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
 pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, auth_type, password, private_key, \
-         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
+         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
          created_at, updated_at, sort_order \
          FROM connections WHERE id = ?1",
     )?;
@@ -64,9 +65,10 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, 
             group_id: row.get(9)?,
             keepalive_interval_secs: row.get::<_, i64>(10)? as u32,
             keepalive_max: row.get::<_, i64>(11)? as u32,
-            created_at: row.get(12)?,
-            updated_at: row.get(13)?,
-            sort_order: row.get(14)?,
+            is_important: row.get::<_, i64>(12)? != 0,
+            created_at: row.get(13)?,
+            updated_at: row.get(14)?,
+            sort_order: row.get(15)?,
         })
     })?;
 
@@ -86,9 +88,9 @@ pub fn create(
 
     conn.execute(
         "INSERT INTO connections (id, name, host, port, username, auth_type, password, \
-         private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, \
+         private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
          created_at, updated_at, sort_order) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             id,
             req.name,
@@ -102,6 +104,7 @@ pub fn create(
             req.group_id,
             req.keepalive_interval_secs as i64,
             req.keepalive_max as i64,
+            if req.is_important { 1_i64 } else { 0_i64 },
             now,
             now,
             sort_order,
@@ -121,6 +124,7 @@ pub fn create(
         group_id: req.group_id.clone(),
         keepalive_interval_secs: req.keepalive_interval_secs,
         keepalive_max: req.keepalive_max,
+        is_important: req.is_important,
         created_at: now,
         updated_at: now,
         sort_order,
@@ -147,8 +151,8 @@ pub fn update(conn: &Connection, req: &UpdateConnectionRequest) -> Result<(), ru
     conn.execute(
         "UPDATE connections SET name = ?1, host = ?2, port = ?3, username = ?4, \
          auth_type = ?5, password = ?6, private_key = ?7, private_key_passphrase = ?8, \
-         group_id = ?9, keepalive_interval_secs = ?10, keepalive_max = ?11, updated_at = ?12, \
-         sort_order = ?13 WHERE id = ?14",
+         group_id = ?9, keepalive_interval_secs = ?10, keepalive_max = ?11, is_important = ?12, \
+         updated_at = ?13, sort_order = ?14 WHERE id = ?15",
         params![
             req.name,
             req.host,
@@ -161,6 +165,7 @@ pub fn update(conn: &Connection, req: &UpdateConnectionRequest) -> Result<(), ru
             req.group_id,
             req.keepalive_interval_secs as i64,
             req.keepalive_max as i64,
+            if req.is_important { 1_i64 } else { 0_i64 },
             now,
             sort_order,
             req.id,
@@ -262,6 +267,7 @@ mod tests {
             group_id: None,
             keepalive_interval_secs: 30,
             keepalive_max: 3,
+            is_important: false,
         };
 
         let created = create(&conn, &req).unwrap();
@@ -287,6 +293,7 @@ mod tests {
             group_id: None,
             keepalive_interval_secs: 0,
             keepalive_max: 5,
+            is_important: false,
         };
 
         let created = create(&conn, &req).unwrap();
@@ -312,6 +319,7 @@ mod tests {
             group_id: None,
             keepalive_interval_secs: 30,
             keepalive_max: 3,
+            is_important: false,
         };
 
         let created = create(&conn, &req).unwrap();
@@ -328,6 +336,7 @@ mod tests {
             group_id: None,
             keepalive_interval_secs: 60,
             keepalive_max: 6,
+            is_important: false,
         };
 
         update(&conn, &update_req).unwrap();
@@ -336,6 +345,52 @@ mod tests {
         assert_eq!(found.host, "5.6.7.8");
         assert_eq!(found.keepalive_interval_secs, 60);
         assert_eq!(found.keepalive_max, 6);
+    }
+
+    #[test]
+    fn test_create_list_and_update_preserve_important_marker() {
+        let conn = create_test_db();
+        let req = CreateConnectionRequest {
+            name: "important-server".to_string(),
+            host: "10.10.10.10".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_type: AuthType::Password,
+            password: None,
+            private_key: None,
+            private_key_passphrase: None,
+            group_id: None,
+            keepalive_interval_secs: 30,
+            keepalive_max: 3,
+            is_important: true,
+        };
+
+        let created = create(&conn, &req).unwrap();
+        assert!(created.is_important);
+
+        let listed = list_all(&conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].is_important);
+
+        let update_req = UpdateConnectionRequest {
+            id: created.id.clone(),
+            name: "normal-server".to_string(),
+            host: "10.10.10.11".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_type: AuthType::Password,
+            password: None,
+            private_key: None,
+            private_key_passphrase: None,
+            group_id: None,
+            keepalive_interval_secs: 30,
+            keepalive_max: 3,
+            is_important: false,
+        };
+
+        update(&conn, &update_req).unwrap();
+        let found = get_by_id(&conn, &created.id).unwrap().unwrap();
+        assert!(!found.is_important);
     }
 
     #[test]
@@ -353,6 +408,7 @@ mod tests {
             group_id: None,
             keepalive_interval_secs: 30,
             keepalive_max: 3,
+            is_important: false,
         };
 
         let created = create(&conn, &req).unwrap();
@@ -379,6 +435,7 @@ mod tests {
                 group_id: Some(group_id.clone()),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -396,6 +453,7 @@ mod tests {
                 group_id: Some(group_id),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -423,6 +481,7 @@ mod tests {
                 group_id: Some(prod_group_id.clone()),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -440,6 +499,7 @@ mod tests {
                 group_id: Some(prod_group_id.clone()),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -457,6 +517,7 @@ mod tests {
                 group_id: Some(test_group_id),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -498,6 +559,7 @@ mod tests {
                 group_id: Some(test_group_id.clone()),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -515,6 +577,7 @@ mod tests {
                 group_id: Some(prod_group_id),
                 keepalive_interval_secs: 30,
                 keepalive_max: 3,
+                is_important: false,
             },
         )
         .unwrap();
@@ -534,6 +597,7 @@ mod tests {
                 group_id: Some(test_group_id.clone()),
                 keepalive_interval_secs: moved.keepalive_interval_secs,
                 keepalive_max: moved.keepalive_max,
+                is_important: moved.is_important,
             },
         )
         .unwrap();

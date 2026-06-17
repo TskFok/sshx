@@ -24,6 +24,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
             group_id TEXT,
             keepalive_interval_secs INTEGER NOT NULL DEFAULT 30,
             keepalive_max INTEGER NOT NULL DEFAULT 3,
+            is_important INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
@@ -38,6 +39,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     )?;
     migrate_v2_connection_keepalive(conn)?;
     migrate_v3_sort_order(conn)?;
+    migrate_v4_connection_important_marker(conn)?;
     Ok(())
 }
 
@@ -115,6 +117,22 @@ fn migrate_v3_sort_order(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+fn migrate_v4_connection_important_marker(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('connections') WHERE name = 'is_important'",
+        [],
+        |r| r.get(0),
+    )?;
+    if n > 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE connections ADD COLUMN is_important INTEGER NOT NULL DEFAULT 0",
+        [],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +195,37 @@ mod tests {
 
         assert_eq!(group_cols, 1);
         assert_eq!(connection_cols, 1);
+    }
+
+    #[test]
+    fn test_important_marker_column_exists_with_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        let important_cols: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('connections') WHERE name = 'is_important'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(important_cols, 1);
+
+        conn.execute(
+            "INSERT INTO connections (
+                id, name, host, port, username, auth_type, created_at, updated_at
+            ) VALUES ('normal', 'Normal', 'normal.example.com', 22, 'root', 'password', 1, 1)",
+            [],
+        )
+        .unwrap();
+        let is_important: i64 = conn
+            .query_row(
+                "SELECT is_important FROM connections WHERE id = 'normal'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(is_important, 0);
     }
 
     #[test]

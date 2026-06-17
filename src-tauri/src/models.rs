@@ -8,6 +8,10 @@ fn default_keepalive_max() -> u32 {
     3
 }
 
+fn default_is_important() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionInfo {
@@ -27,6 +31,9 @@ pub struct ConnectionInfo {
     /// 连续多少次 keepalive 未收到任何服务端数据则断开；建议 3。
     #[serde(default = "default_keepalive_max")]
     pub keepalive_max: u32,
+    /// 是否为重点连接，用于在连接列表中突出边框。
+    #[serde(default = "default_is_important")]
+    pub is_important: bool,
     pub created_at: i64,
     pub updated_at: i64,
     pub sort_order: i64,
@@ -81,6 +88,8 @@ pub struct CreateConnectionRequest {
     pub keepalive_interval_secs: u32,
     #[serde(default = "default_keepalive_max")]
     pub keepalive_max: u32,
+    #[serde(default = "default_is_important")]
+    pub is_important: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +109,8 @@ pub struct UpdateConnectionRequest {
     pub keepalive_interval_secs: u32,
     #[serde(default = "default_keepalive_max")]
     pub keepalive_max: u32,
+    #[serde(default = "default_is_important")]
+    pub is_important: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
