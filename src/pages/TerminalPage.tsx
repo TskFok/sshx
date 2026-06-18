@@ -17,8 +17,6 @@ import {
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -35,6 +33,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AuthPromptDialog,
+  type AuthPromptData,
+} from "@/components/ssh/AuthPromptDialog";
 import {
   useAppStore,
   type ConnectionGroup,
@@ -106,13 +108,6 @@ interface RemoteFileEntry {
 interface RemoteDirSnapshot {
   cwd: string;
   entries: RemoteFileEntry[];
-}
-
-interface AuthPromptData {
-  sessionId: string;
-  name: string;
-  instructions: string;
-  prompts: { prompt: string; echo: boolean }[];
 }
 
 const DEFAULT_FONT_SIZE = 14;
@@ -1270,49 +1265,13 @@ export function TerminalPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={authPrompt !== null} onOpenChange={(open) => { if (!open) handleAuthCancel(); }}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>{authPrompt?.name || "SSH 认证"}</DialogTitle>
-            {authPrompt?.instructions && (
-              <DialogDescription>{authPrompt.instructions}</DialogDescription>
-            )}
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            {authPrompt?.prompts.map((p, i) => (
-              <div key={i} className="space-y-2">
-                <Label>{p.prompt}</Label>
-                <Input
-                  type={p.echo ? "text" : "password"}
-                  value={authResponses[i] ?? ""}
-                  onChange={(e) => {
-                    setAuthResponses((prev) => {
-                      const next = [...prev];
-                      next[i] = e.target.value;
-                      return next;
-                    });
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleAuthSubmit();
-                    }
-                  }}
-                  autoFocus={i === 0}
-                />
-              </div>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={handleAuthCancel}>
-              取消
-            </Button>
-            <Button onClick={handleAuthSubmit}>
-              确认
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AuthPromptDialog
+        prompt={authPrompt}
+        responses={authResponses}
+        onResponsesChange={setAuthResponses}
+        onSubmit={handleAuthSubmit}
+        onCancel={handleAuthCancel}
+      />
     </div>
   );
 }

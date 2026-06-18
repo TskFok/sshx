@@ -35,11 +35,31 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS file_transfer_history (
+            id TEXT PRIMARY KEY,
+            connection_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            local_path TEXT NOT NULL,
+            local_dir TEXT NOT NULL,
+            remote_path TEXT NOT NULL,
+            remote_dir TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            total_bytes INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER,
+            duration_ms INTEGER,
+            average_speed_bps INTEGER,
+            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+        );
         ",
     )?;
     migrate_v2_connection_keepalive(conn)?;
     migrate_v3_sort_order(conn)?;
     migrate_v4_connection_important_marker(conn)?;
+    migrate_v5_file_transfer_history(conn)?;
     Ok(())
 }
 
@@ -129,6 +149,39 @@ fn migrate_v4_connection_important_marker(conn: &Connection) -> Result<(), rusql
     conn.execute(
         "ALTER TABLE connections ADD COLUMN is_important INTEGER NOT NULL DEFAULT 0",
         [],
+    )?;
+    Ok(())
+}
+
+fn migrate_v5_file_transfer_history(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS file_transfer_history (
+            id TEXT PRIMARY KEY,
+            connection_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            local_path TEXT NOT NULL,
+            local_dir TEXT NOT NULL,
+            remote_path TEXT NOT NULL,
+            remote_dir TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            total_bytes INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER,
+            duration_ms INTEGER,
+            average_speed_bps INTEGER,
+            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+        );
+        UPDATE file_transfer_history
+        SET status = 'failed',
+            error_message = COALESCE(error_message, '应用异常中断，传输未完成'),
+            ended_at = COALESCE(ended_at, started_at),
+            duration_ms = COALESCE(duration_ms, 0),
+            average_speed_bps = COALESCE(average_speed_bps, 0)
+        WHERE status = 'running';
+        ",
     )?;
     Ok(())
 }
@@ -226,6 +279,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(is_important, 0);
+    }
+
+    #[test]
+    fn test_file_transfer_history_table_exists_and_running_rows_are_recovered() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        let history_cols: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('file_transfer_history') WHERE name IN (
+                    'id',
+                    'connection_id',
+                    'direction',
+                    'local_path',
+                    'local_dir',
+                    'remote_path',
+                    'remote_dir',
+                    'file_name',
+                    'total_bytes',
+                    'status',
+                    'error_message',
+                    'started_at',
+                    'ended_at',
+                    'duration_ms',
+                    'average_speed_bps'
+                )",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(history_cols, 15);
+
+        conn.execute(
+            "INSERT INTO connections (
+                id, name, host, port, username, auth_type, created_at, updated_at
+            ) VALUES ('c1', 'Conn', 'example.com', 22, 'root', 'password', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO file_transfer_history (
+                id, connection_id, direction, local_path, local_dir, remote_path, remote_dir,
+                file_name, total_bytes, status, error_message, started_at, ended_at,
+                duration_ms, average_speed_bps
+            ) VALUES (
+                't1', 'c1', 'upload', '/tmp/a.txt', '/tmp', '/home/u/a.txt', '/home/u',
+                'a.txt', 12, 'running', NULL, 1, NULL, NULL, NULL
+            )",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM file_transfer_history WHERE id = 't1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let error_message: String = conn
+            .query_row(
+                "SELECT error_message FROM file_transfer_history WHERE id = 't1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(status, "failed");
+        assert!(error_message.contains("异常中断"));
     }
 
     #[test]

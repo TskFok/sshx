@@ -1,7 +1,7 @@
 use super::SessionCmd;
-use crate::ssh::auth::ClientHandler;
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
+use crate::ssh::auth::ClientHandler;
 use russh::client::Handle;
 use russh::ChannelId;
 use tauri::{AppHandle, Emitter};
@@ -117,6 +117,21 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
+        self.sftp_upload_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
+            .await
+    }
+
+    pub async fn sftp_upload_with_progress<F>(
+        &self,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+        _total_bytes: u64,
+        mut progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
         use crate::ssh::path_secure::{is_subpath, join_remote_relative, validate_remote_relative};
         use russh_sftp::{client::SftpSession, protocol::OpenFlags};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -166,6 +181,7 @@ impl SshSession {
             .await
             .map_err(|e| format!("打开本地文件失败: {e}"))?;
         let mut buf = vec![0u8; 65536];
+        let mut transferred = 0_u64;
         loop {
             let n = local
                 .read(&mut buf)
@@ -177,6 +193,8 @@ impl SshSession {
             file.write_all(&buf[..n])
                 .await
                 .map_err(|e| format!("写入远程失败: {e}"))?;
+            transferred = transferred.saturating_add(n as u64);
+            progress(transferred);
         }
         file.flush()
             .await
@@ -192,6 +210,21 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
+        self.sftp_download_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
+            .await
+    }
+
+    pub async fn sftp_download_with_progress<F>(
+        &self,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+        _total_bytes: u64,
+        mut progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
         use crate::ssh::path_secure::{is_subpath, join_remote_relative, validate_remote_relative};
         use russh_sftp::{client::SftpSession, protocol::OpenFlags};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -238,6 +271,7 @@ impl SshSession {
             .await
             .map_err(|e| format!("创建本地文件失败: {e}"))?;
         let mut buf = vec![0u8; 65536];
+        let mut transferred = 0_u64;
         loop {
             let n = file
                 .read(&mut buf)
@@ -250,12 +284,117 @@ impl SshSession {
                 .write_all(&buf[..n])
                 .await
                 .map_err(|e| format!("写入本地失败: {e}"))?;
+            transferred = transferred.saturating_add(n as u64);
+            progress(transferred);
         }
         local
             .flush()
             .await
             .map_err(|e| format!("写入本地失败: {e}"))?;
         Ok(())
+    }
+
+    pub async fn list_remote_dir(
+        &self,
+        path: &str,
+    ) -> Result<crate::models::RemoteDirSnapshot, String> {
+        use crate::models::{RemoteDirSnapshot, RemoteFileEntry};
+        use crate::ssh::path_secure::validate_remote_abs_path_for_exec;
+        use russh_sftp::client::SftpSession;
+
+        let requested = validate_remote_abs_path_for_exec(path)?;
+        let ch = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("打开 SFTP 通道失败: {e}"))?;
+        ch.request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| format!("请求 SFTP 子系统失败: {e}"))?;
+        let sftp = SftpSession::new(ch.into_stream())
+            .await
+            .map_err(|e| format!("SFTP 初始化失败: {e}"))?;
+        let cwd = sftp
+            .canonicalize(requested)
+            .await
+            .map_err(|e| format!("无法解析远程目录: {e}"))?;
+        let mut entries = Vec::new();
+        let read_dir = sftp
+            .read_dir(cwd.clone())
+            .await
+            .map_err(|e| format!("读取远程目录失败: {e}"))?;
+        for entry in read_dir {
+            let name = entry.file_name();
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            let meta = entry.metadata();
+            let is_directory = entry.file_type().is_dir();
+            entries.push(RemoteFileEntry {
+                path: format!("{}/{}", cwd.trim_end_matches('/'), name),
+                name,
+                is_directory,
+                size: if is_directory { None } else { Some(meta.len()) },
+                modified_at: meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs() as i64),
+            });
+        }
+        entries.sort_by(|a, b| {
+            b.is_directory
+                .cmp(&a.is_directory)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(RemoteDirSnapshot { cwd, entries })
+    }
+
+    pub async fn remote_path_exists(&self, path: &str) -> Result<bool, String> {
+        use crate::ssh::path_secure::validate_remote_abs_path_for_exec;
+        use russh_sftp::client::SftpSession;
+
+        let path = validate_remote_abs_path_for_exec(path)?;
+        let ch = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("打开 SFTP 通道失败: {e}"))?;
+        ch.request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| format!("请求 SFTP 子系统失败: {e}"))?;
+        let sftp = SftpSession::new(ch.into_stream())
+            .await
+            .map_err(|e| format!("SFTP 初始化失败: {e}"))?;
+        sftp.try_exists(path)
+            .await
+            .map_err(|e| format!("检查远程路径失败: {e}"))
+    }
+
+    pub async fn remote_file_size(&self, path: &str) -> Result<u64, String> {
+        use crate::ssh::path_secure::validate_remote_abs_path_for_exec;
+        use russh_sftp::client::SftpSession;
+
+        let path = validate_remote_abs_path_for_exec(path)?;
+        let ch = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("打开 SFTP 通道失败: {e}"))?;
+        ch.request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| format!("请求 SFTP 子系统失败: {e}"))?;
+        let sftp = SftpSession::new(ch.into_stream())
+            .await
+            .map_err(|e| format!("SFTP 初始化失败: {e}"))?;
+        let meta = sftp
+            .metadata(path)
+            .await
+            .map_err(|e| format!("读取远程文件信息失败: {e}"))?;
+        if meta.is_dir() {
+            return Err("远程路径是目录，首版仅支持文件下载".to_string());
+        }
+        Ok(meta.len())
     }
 
     async fn remote_exec_capture(&self, command: &str) -> Result<String, String> {

@@ -7,8 +7,8 @@ mod models;
 mod ssh;
 
 use commands::{
-    connection, diagnostic as diagnostic_commands, settings, sftp as sftp_commands,
-    ssh as ssh_commands,
+    connection, diagnostic as diagnostic_commands, file_transfer as file_transfer_commands,
+    settings, sftp as sftp_commands, ssh as ssh_commands,
 };
 use db::Database;
 use ssh::manager::SessionManager;
@@ -49,6 +49,11 @@ pub fn run() {
             sftp_commands::sftp_list_remote_dir,
             sftp_commands::sftp_upload,
             sftp_commands::sftp_download,
+            file_transfer_commands::file_transfer_list_local_dir,
+            file_transfer_commands::file_transfer_list_remote_dir,
+            file_transfer_commands::file_transfer_upload,
+            file_transfer_commands::file_transfer_download,
+            file_transfer_commands::file_transfer_list_history,
             settings::get_settings,
             settings::update_settings,
         ])
@@ -59,9 +64,9 @@ pub fn run() {
                 let db = app.try_state::<Database>().ok_or_else(|| {
                     Box::<dyn std::error::Error>::from("database not initialized")
                 })?;
-                let conn = db.0.lock().map_err(|e| {
-                    Box::<dyn std::error::Error>::from(e.to_string())
-                })?;
+                let conn =
+                    db.0.lock()
+                        .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
                 settings::read_diagnostic_logging_enabled(&conn)
             };
             diagnostic::init(&app_handle, 2500, capture_on);

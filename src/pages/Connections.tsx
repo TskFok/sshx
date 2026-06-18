@@ -12,6 +12,7 @@ import {
   Trash2,
   Terminal,
   FolderPlus,
+  FolderOpen,
   Zap,
   Loader2,
   CheckCircle2,
@@ -76,6 +77,10 @@ import {
   writeCollapsedGroupIds,
 } from "@/lib/connectionGroups";
 import { cn } from "@/lib/utils";
+import {
+  getConnectionFileTransferPath,
+  getTerminalNavigationState,
+} from "@/lib/connectionNavigation";
 
 interface ConnectionFormData {
   name: string;
@@ -265,8 +270,13 @@ export function Connections() {
     }
   };
 
-  const handleConnect = (conn: ConnectionInfo) => {
-    navigate("/terminal", { state: { connectionId: conn.id } });
+  const handleOpenTerminal = (conn: ConnectionInfo) => {
+    const target = getTerminalNavigationState(conn.id);
+    navigate(target.pathname, { state: target.state });
+  };
+
+  const handleOpenFileTransfer = (conn: ConnectionInfo) => {
+    navigate(getConnectionFileTransferPath(conn.id));
   };
 
   const handleExportConnections = async () => {
@@ -817,7 +827,7 @@ export function Connections() {
                           : "hover:shadow-md",
                         dragOverConnectionId === conn.id && "ring-2 ring-ring"
                       )}
-                      onClick={() => handleConnect(conn)}
+                      onClick={() => handleOpenFileTransfer(conn)}
                     >
                       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
                         <div className="flex min-w-0 items-center gap-3">
@@ -908,11 +918,20 @@ export function Connections() {
                               <DropdownMenuItem
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleConnect(conn);
+                                  handleOpenTerminal(conn);
                                 }}
                               >
                                 <Terminal className="mr-2 h-4 w-4" />
                                 连接
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenFileTransfer(conn);
+                                }}
+                              >
+                                <FolderOpen className="mr-2 h-4 w-4" />
+                                文件传输
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={(e) => {

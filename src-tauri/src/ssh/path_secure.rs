@@ -30,7 +30,10 @@ pub fn parse_ls_1ap(listing: &str) -> Vec<RemoteFileEntry> {
         }
         out.push(RemoteFileEntry {
             name: name.to_string(),
+            path: String::new(),
             is_directory: is_dir,
+            size: None,
+            modified_at: None,
         });
     }
     out.sort_by(|a, b| {
@@ -50,7 +53,6 @@ pub fn sh_single_quote(s: &str) -> String {
 
 /// 将已规范化的远程基路径与相对片段拼接为远程文件路径。
 /// `relative` 不得为空、不得以 `/` 开头、路径段中不得出现 `..`。
-#[cfg(any(test, not(target_os = "macos")))]
 pub fn join_remote_relative(base_canonical: &str, relative: &str) -> Result<String, String> {
     let rel = relative.trim();
     if rel.is_empty() {

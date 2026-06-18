@@ -262,7 +262,13 @@ pub struct SftpTransferRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteFileEntry {
     pub name: String,
+    #[serde(default)]
+    pub path: String,
     pub is_directory: bool,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub modified_at: Option<i64>,
 }
 
 /// 远程 shell 当前目录下的条目（由 `pwd` + `ls` 得到，与交互 shell 状态一致）。
@@ -277,6 +283,140 @@ pub struct RemoteDirSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct SftpSessionIdRequest {
     pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileTransferDirection {
+    Upload,
+    Download,
+}
+
+impl FileTransferDirection {
+    pub fn as_str(&self) -> &str {
+        match self {
+            FileTransferDirection::Upload => "upload",
+            FileTransferDirection::Download => "download",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "download" => FileTransferDirection::Download,
+            _ => FileTransferDirection::Upload,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileTransferStatus {
+    Running,
+    Success,
+    Failed,
+}
+
+impl FileTransferStatus {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "success" => FileTransferStatus::Success,
+            "failed" => FileTransferStatus::Failed,
+            _ => FileTransferStatus::Running,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalFileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_directory: bool,
+    pub size: Option<u64>,
+    pub modified_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDirSnapshot {
+    pub cwd: String,
+    pub parent: Option<String>,
+    pub entries: Vec<LocalFileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferListLocalDirRequest {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferListRemoteDirRequest {
+    pub session_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferUploadRequest {
+    pub transfer_id: String,
+    pub session_id: String,
+    pub connection_id: String,
+    pub local_path: String,
+    pub remote_dir: String,
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferDownloadRequest {
+    pub transfer_id: String,
+    pub session_id: String,
+    pub connection_id: String,
+    pub remote_path: String,
+    pub local_dir: String,
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferListHistoryRequest {
+    pub connection_id: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferHistory {
+    pub id: String,
+    pub connection_id: String,
+    pub direction: FileTransferDirection,
+    pub local_path: String,
+    pub local_dir: String,
+    pub remote_path: String,
+    pub remote_dir: String,
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub status: FileTransferStatus,
+    pub error_message: Option<String>,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub average_speed_bps: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferProgressPayload {
+    pub transfer_id: String,
+    pub direction: FileTransferDirection,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+    pub speed_bps: u64,
+    pub progress: f64,
+    pub status: FileTransferStatus,
+    pub message: Option<String>,
 }
 
 /// 终端 `ssh-close-*` 事件负载（前端可区分本地关标签与服务端断开）。

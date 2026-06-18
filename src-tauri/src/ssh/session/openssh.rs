@@ -7,12 +7,18 @@ use crate::ssh::auth::AuthMethod;
 use crate::ssh::prompt::{AuthPromptManager, AuthPromptPayload, PromptItem};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
 const SSH_BIN: &str = "/usr/bin/ssh";
 const SCAN_MAX: usize = 65536;
+const SFTP_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SFTP_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+type ProgressProbe = Box<dyn FnMut() -> Option<u64> + Send>;
 
 pub struct SshSession {
     pub id: String,
@@ -57,19 +63,60 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        use crate::ssh::path_secure::validate_remote_relative;
+        self.sftp_upload_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
+            .await
+    }
+
+    pub async fn sftp_upload_with_progress<F>(
+        &self,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+        total_bytes: u64,
+        progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
+        use crate::ssh::path_secure::{join_remote_relative, validate_remote_relative};
         validate_remote_relative(remote_name)?;
         if !std::path::Path::new(&self.control_path).exists() {
             return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
         }
+        let remote_full = join_remote_relative(remote_base_dir, remote_name)?;
+        let ssh_prefix = self.ssh_mux_prefix_args.clone();
+        let probe_dest = self.sftp_destination.clone();
         let prefix = self.sftp_prefix_args.clone();
         let dest = self.sftp_destination.clone();
         let rb = remote_base_dir.to_string();
         let rn = remote_name.to_string();
         let lp = local_path.to_path_buf();
         tokio::task::spawn_blocking(move || {
-            let batch = format!("cd {}\nput {} {}\n", rb, lp.to_string_lossy(), rn);
-            run_sftp_with_batch(&prefix, &dest, &batch)
+            let initial_remote_size =
+                remote_file_size_via_mux(&ssh_prefix, &probe_dest, &remote_full).ok();
+            let mut observed_remote_changed = initial_remote_size.is_none();
+            let progress_probe: ProgressProbe = Box::new(move || {
+                let size = remote_file_size_via_mux(&ssh_prefix, &probe_dest, &remote_full).ok()?;
+                if !observed_remote_changed && Some(size) == initial_remote_size {
+                    return None;
+                }
+                observed_remote_changed = true;
+                Some(size)
+            });
+            let batch = format!(
+                "cd {}\nput {} {}\n",
+                sftp_batch_quote(&rb),
+                sftp_batch_quote(&lp.to_string_lossy()),
+                sftp_batch_quote(&rn)
+            );
+            run_sftp_with_batch_progress(
+                &prefix,
+                &dest,
+                &batch,
+                total_bytes,
+                Some(progress_probe),
+                progress,
+            )
         })
         .await
         .map_err(|e| format!("sftp 任务异常: {e}"))?
@@ -81,6 +128,21 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
+        self.sftp_download_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
+            .await
+    }
+
+    pub async fn sftp_download_with_progress<F>(
+        &self,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+        total_bytes: u64,
+        progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
         use crate::ssh::path_secure::validate_remote_relative;
         validate_remote_relative(remote_name)?;
         if !std::path::Path::new(&self.control_path).exists() {
@@ -91,9 +153,32 @@ impl SshSession {
         let rb = remote_base_dir.to_string();
         let rn = remote_name.to_string();
         let lp = local_path.to_path_buf();
+        let initial_local_size = std::fs::metadata(local_path).ok().map(|metadata| metadata.len());
+        let mut observed_local_changed = initial_local_size.is_none();
+        let poll_path = lp.clone();
+        let progress_probe: ProgressProbe = Box::new(move || {
+            let size = std::fs::metadata(&poll_path).ok()?.len();
+            if !observed_local_changed && Some(size) == initial_local_size {
+                return None;
+            }
+            observed_local_changed = true;
+            Some(size)
+        });
         tokio::task::spawn_blocking(move || {
-            let batch = format!("cd {}\nget {} {}\n", rb, rn, lp.to_string_lossy());
-            run_sftp_with_batch(&prefix, &dest, &batch)
+            let batch = format!(
+                "cd {}\nget {} {}\n",
+                sftp_batch_quote(&rb),
+                sftp_batch_quote(&rn),
+                sftp_batch_quote(&lp.to_string_lossy())
+            );
+            run_sftp_with_batch_progress(
+                &prefix,
+                &dest,
+                &batch,
+                total_bytes,
+                Some(progress_probe),
+                progress,
+            )
         })
         .await
         .map_err(|e| format!("sftp 任务异常: {e}"))?
@@ -133,6 +218,62 @@ impl SshSession {
         })
         .await
         .map_err(|e| format!("列目录任务异常: {e}"))?
+    }
+
+    pub async fn list_remote_dir(
+        &self,
+        path: &str,
+    ) -> Result<crate::models::RemoteDirSnapshot, String> {
+        use crate::models::RemoteDirSnapshot;
+        use crate::ssh::path_secure::{parse_ls_1ap, validate_remote_abs_path_for_exec};
+        let requested = validate_remote_abs_path_for_exec(path)?;
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.ssh_mux_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        tokio::task::spawn_blocking(move || {
+            run_ssh_mux_exec_argv(&prefix, &dest, &["test", "-d", &requested])?;
+            let cwd = validate_remote_abs_path_for_exec(&requested)?;
+            let listing = run_ssh_mux_exec_argv(&prefix, &dest, &["ls", "-1Ap", &cwd])?;
+            let mut entries = parse_ls_1ap(&listing);
+            for entry in &mut entries {
+                entry.path = format!("{}/{}", cwd.trim_end_matches('/'), entry.name);
+            }
+            Ok(RemoteDirSnapshot { cwd, entries })
+        })
+        .await
+        .map_err(|e| format!("列目录任务异常: {e}"))?
+    }
+
+    pub async fn remote_path_exists(&self, path: &str) -> Result<bool, String> {
+        use crate::ssh::path_secure::validate_remote_abs_path_for_exec;
+        let path = validate_remote_abs_path_for_exec(path)?;
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.ssh_mux_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        tokio::task::spawn_blocking(move || {
+            Ok(run_ssh_mux_exec_argv(&prefix, &dest, &["test", "-e", &path]).is_ok())
+        })
+        .await
+        .map_err(|e| format!("检查远程路径任务异常: {e}"))?
+    }
+
+    pub async fn remote_file_size(&self, path: &str) -> Result<u64, String> {
+        use crate::ssh::path_secure::validate_remote_abs_path_for_exec;
+        let path = validate_remote_abs_path_for_exec(path)?;
+        if !std::path::Path::new(&self.control_path).exists() {
+            return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
+        }
+        let prefix = self.ssh_mux_prefix_args.clone();
+        let dest = self.sftp_destination.clone();
+        tokio::task::spawn_blocking(move || {
+            remote_file_size_via_mux(&prefix, &dest, &path)
+        })
+        .await
+        .map_err(|e| format!("读取远程文件信息任务异常: {e}"))?
     }
 }
 
@@ -440,30 +581,196 @@ fn compact_control_socket_path() -> String {
     format!("/tmp/sshx-{id}.sock")
 }
 
-fn run_sftp_with_batch(
+fn run_sftp_with_batch_progress<F>(
     prefix_args: &[String],
     destination: &str,
     batch: &str,
-) -> Result<(), String> {
+    total_bytes: u64,
+    mut progress_probe: Option<ProgressProbe>,
+    mut progress: F,
+) -> Result<(), String>
+where
+    F: FnMut(u64),
+{
     const SFTP_BIN: &str = "/usr/bin/sftp";
     let batch_path = std::env::temp_dir().join(format!("sshx-sftp-b-{}.txt", uuid::Uuid::new_v4()));
     std::fs::write(&batch_path, batch).map_err(|e| format!("写入 SFTP 批处理失败: {e}"))?;
-    let status = std::process::Command::new(SFTP_BIN)
-        .args(prefix_args)
-        .arg("-b")
-        .arg(&batch_path)
-        .arg(destination)
-        .status()
+    let mut cmd = CommandBuilder::new(SFTP_BIN);
+    let batch_path = batch_path.to_string_lossy().to_string();
+    for arg in build_sftp_batch_args(prefix_args, &batch_path, destination) {
+        cmd.arg(arg);
+    }
+
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("启动 sftp PTY 失败: {e}"))?;
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("读取 sftp 输出失败: {e}"))?;
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
         .map_err(|e| format!("启动 sftp 失败: {e}"))?;
+    drop(pair.slave);
+
+    let (output_tx, output_rx) = std_mpsc::channel();
+    let reader_handle = thread::spawn(move || {
+        let mut buf = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if output_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut output = String::new();
+    let mut last_reported = 0_u64;
+    let mut last_probe_at = Instant::now();
+    let status;
+    loop {
+        drain_sftp_output(
+            &output_rx,
+            &mut output,
+            &mut last_reported,
+            total_bytes,
+            &mut progress,
+        );
+
+        if last_probe_at.elapsed() >= SFTP_PROGRESS_POLL_INTERVAL {
+            if let Some(probe) = progress_probe.as_mut() {
+                if let Some(bytes) = probe() {
+                    report_progress_bytes(&mut last_reported, total_bytes, bytes, &mut progress);
+                }
+            }
+            last_probe_at = Instant::now();
+        }
+
+        match child
+            .try_wait()
+            .map_err(|e| format!("等待 sftp 结束失败: {e}"))?
+        {
+            Some(next_status) => {
+                status = next_status;
+                break;
+            }
+            None => thread::sleep(SFTP_WAIT_POLL_INTERVAL),
+        }
+    }
+    let _ = reader_handle.join();
+    drain_sftp_output(
+        &output_rx,
+        &mut output,
+        &mut last_reported,
+        total_bytes,
+        &mut progress,
+    );
     let _ = std::fs::remove_file(&batch_path);
     if status.success() {
+        progress(total_bytes);
         Ok(())
     } else {
         Err(format!(
-            "sftp 失败（退出码 {:?}）；请确认服务端已启用 SFTP / 路径与权限是否正确",
-            status.code()
+            "sftp 失败；请确认服务端已启用 SFTP / 路径与权限是否正确。输出: {}",
+            output.trim()
         ))
     }
+}
+
+fn drain_sftp_output<F>(
+    output_rx: &std_mpsc::Receiver<Vec<u8>>,
+    output: &mut String,
+    last_reported: &mut u64,
+    total_bytes: u64,
+    progress: &mut F,
+) where
+    F: FnMut(u64),
+{
+    while let Ok(bytes) = output_rx.try_recv() {
+        let chunk = String::from_utf8_lossy(&bytes);
+        output.push_str(&chunk);
+        for part in chunk.split(['\r', '\n']) {
+            if let Some(percent) = parse_sftp_progress_percent(part) {
+                let bytes = total_bytes.saturating_mul(percent as u64) / 100;
+                report_progress_bytes(last_reported, total_bytes, bytes, progress);
+            }
+        }
+    }
+}
+
+fn report_progress_bytes<F>(
+    last_reported: &mut u64,
+    total_bytes: u64,
+    bytes: u64,
+    progress: &mut F,
+) where
+    F: FnMut(u64),
+{
+    let clamped = if total_bytes == 0 {
+        bytes
+    } else {
+        bytes.min(total_bytes)
+    };
+    if clamped > *last_reported {
+        *last_reported = clamped;
+        progress(clamped);
+    }
+}
+
+fn remote_file_size_via_mux(prefix: &[String], destination: &str, path: &str) -> Result<u64, String> {
+    run_ssh_mux_exec_argv(prefix, destination, &["test", "-f", path])?;
+    let out = run_ssh_mux_exec_argv(prefix, destination, &["wc", "-c", path])?;
+    parse_wc_file_size(&out)
+}
+
+fn parse_wc_file_size(output: &str) -> Result<u64, String> {
+    let first = output
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "无法解析远程文件大小".to_string())?;
+    first
+        .parse::<u64>()
+        .map_err(|e| format!("无法解析远程文件大小: {e}"))
+}
+
+fn build_sftp_batch_args(
+    prefix_args: &[String],
+    batch_path: &str,
+    destination: &str,
+) -> Vec<String> {
+    let mut args = prefix_args.to_vec();
+    args.push("-N".to_string());
+    args.push("-b".to_string());
+    args.push(batch_path.to_string());
+    args.push(destination.to_string());
+    args
+}
+
+fn sftp_batch_quote(path: &str) -> String {
+    format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn parse_sftp_progress_percent(line: &str) -> Option<u8> {
+    for token in line.split_whitespace() {
+        if let Some(raw) = token.strip_suffix('%') {
+            if let Ok(value) = raw.parse::<u8>() {
+                return Some(value.min(100));
+            }
+        }
+    }
+    None
 }
 
 /// 供复用连接的 `sftp` 子进程使用的参数（`BatchMode`、`ControlMaster=no` 与同主机认证选项）。
@@ -1241,6 +1548,73 @@ mod tests {
         assert!(args.iter().any(|a| a == "HostKeyAlgorithms=+ssh-rsa"));
         assert!(args.iter().any(|a| a == "PubkeyAcceptedAlgorithms=+ssh-rsa"));
         assert!(args.last() == Some(&"true".into()));
+    }
+
+    #[test]
+    fn sftp_batch_quote_handles_spaces_and_quotes() {
+        assert_eq!(
+            sftp_batch_quote("/tmp/a b/\"c\".txt"),
+            "\"/tmp/a b/\\\"c\\\".txt\""
+        );
+    }
+
+    #[test]
+    fn build_sftp_batch_args_keep_progress_meter_enabled() {
+        let args = build_sftp_batch_args(&["-P".into(), "22".into()], "/tmp/batch.txt", "u@h");
+
+        assert!(args.contains(&"-N".to_string()));
+        assert_eq!(args.last(), Some(&"u@h".to_string()));
+    }
+
+    #[test]
+    fn parse_sftp_progress_percent_reads_percent_token() {
+        assert_eq!(
+            parse_sftp_progress_percent("file.txt  42%  420KB  1.0MB/s 00:01"),
+            Some(42)
+        );
+        assert_eq!(parse_sftp_progress_percent("no progress"), None);
+        assert_eq!(parse_sftp_progress_percent("done 150%"), Some(100));
+    }
+
+    #[test]
+    fn report_observed_progress_uses_polled_file_size_without_meter_text() {
+        let mut last_reported = 0;
+        let mut events = Vec::new();
+
+        report_progress_bytes(&mut last_reported, 100, 25, &mut |bytes| events.push(bytes));
+        report_progress_bytes(&mut last_reported, 100, 20, &mut |bytes| events.push(bytes));
+        report_progress_bytes(&mut last_reported, 100, 120, &mut |bytes| events.push(bytes));
+
+        assert_eq!(events, vec![25, 100]);
+    }
+
+    #[test]
+    fn run_sftp_with_batch_progress_polls_probe_when_meter_is_silent() {
+        if !std::path::Path::new("/usr/libexec/sftp-server").exists() {
+            return;
+        }
+
+        let mut next_bytes = 0;
+        let progress_probe: ProgressProbe = Box::new(move || {
+            next_bytes += 25;
+            Some(next_bytes)
+        });
+        let mut events = Vec::new();
+
+        let result = run_sftp_with_batch_progress(
+            &["-D".into(), "/usr/libexec/sftp-server".into()],
+            "dummy",
+            "!sleep 1\n",
+            100,
+            Some(progress_probe),
+            |bytes| events.push(bytes),
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            events.iter().any(|bytes| *bytes > 0 && *bytes < 100),
+            "{events:?}"
+        );
     }
 
     #[test]

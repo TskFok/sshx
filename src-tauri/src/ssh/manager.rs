@@ -147,6 +147,92 @@ impl SessionManager {
             .ok_or_else(|| "会话不存在或已断开".to_string())?;
         session.list_remote_cwd().await
     }
+
+    pub async fn sftp_list_remote_dir_at(
+        &self,
+        session_id: &str,
+        path: &str,
+    ) -> Result<crate::models::RemoteDirSnapshot, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.list_remote_dir(path).await
+    }
+
+    pub async fn sftp_remote_path_exists(
+        &self,
+        session_id: &str,
+        path: &str,
+    ) -> Result<bool, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.remote_path_exists(path).await
+    }
+
+    pub async fn sftp_remote_file_size(&self, session_id: &str, path: &str) -> Result<u64, String> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session.remote_file_size(path).await
+    }
+
+    pub async fn sftp_upload_with_progress<F>(
+        &self,
+        session_id: &str,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+        total_bytes: u64,
+        progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session
+            .sftp_upload_with_progress(
+                remote_base_dir,
+                remote_name,
+                local_path,
+                total_bytes,
+                progress,
+            )
+            .await
+    }
+
+    pub async fn sftp_download_with_progress<F>(
+        &self,
+        session_id: &str,
+        remote_base_dir: &str,
+        remote_name: &str,
+        local_path: &std::path::Path,
+        total_bytes: u64,
+        progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        session
+            .sftp_download_with_progress(
+                remote_base_dir,
+                remote_name,
+                local_path,
+                total_bytes,
+                progress,
+            )
+            .await
+    }
 }
 
 #[cfg(test)]
