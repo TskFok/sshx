@@ -200,10 +200,10 @@ impl SshSession {
         .map_err(|e| format!("pwd 任务异常: {e}"))?
     }
 
-    /// 列出远程当前目录下的文件/子目录（`ls -1Ap`）。
+    /// 列出远程当前目录下的文件/子目录（`ls -lnAp`）。
     pub async fn list_remote_cwd(&self) -> Result<crate::models::RemoteDirSnapshot, String> {
         use crate::models::RemoteDirSnapshot;
-        use crate::ssh::path_secure::{parse_ls_1ap, validate_remote_abs_path_for_exec};
+        use crate::ssh::path_secure::{parse_ls_ln_ap, validate_remote_abs_path_for_exec};
         if !std::path::Path::new(&self.control_path).exists() {
             return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
         }
@@ -212,8 +212,8 @@ impl SshSession {
         tokio::task::spawn_blocking(move || {
             let cwd = run_ssh_mux_exec_argv(&prefix, &dest, &["pwd"])?;
             let cwd = validate_remote_abs_path_for_exec(&cwd)?;
-            let listing = run_ssh_mux_exec_argv(&prefix, &dest, &["ls", "-1Ap", &cwd])?;
-            let entries = parse_ls_1ap(&listing);
+            let listing = run_ssh_mux_exec_argv(&prefix, &dest, &["ls", "-lnAp", &cwd])?;
+            let entries = parse_ls_ln_ap(&listing);
             Ok(RemoteDirSnapshot { cwd, entries })
         })
         .await
@@ -225,7 +225,7 @@ impl SshSession {
         path: &str,
     ) -> Result<crate::models::RemoteDirSnapshot, String> {
         use crate::models::RemoteDirSnapshot;
-        use crate::ssh::path_secure::{parse_ls_1ap, validate_remote_abs_path_for_exec};
+        use crate::ssh::path_secure::{parse_ls_ln_ap, validate_remote_abs_path_for_exec};
         let requested = validate_remote_abs_path_for_exec(path)?;
         if !std::path::Path::new(&self.control_path).exists() {
             return Err("SSH 控制套接字已失效，请重新连接后再试".to_string());
@@ -235,8 +235,8 @@ impl SshSession {
         tokio::task::spawn_blocking(move || {
             run_ssh_mux_exec_argv(&prefix, &dest, &["test", "-d", &requested])?;
             let cwd = validate_remote_abs_path_for_exec(&requested)?;
-            let listing = run_ssh_mux_exec_argv(&prefix, &dest, &["ls", "-1Ap", &cwd])?;
-            let mut entries = parse_ls_1ap(&listing);
+            let listing = run_ssh_mux_exec_argv(&prefix, &dest, &["ls", "-lnAp", &cwd])?;
+            let mut entries = parse_ls_ln_ap(&listing);
             for entry in &mut entries {
                 entry.path = format!("{}/{}", cwd.trim_end_matches('/'), entry.name);
             }

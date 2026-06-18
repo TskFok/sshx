@@ -19,6 +19,19 @@ export interface TransferProgressPayload {
 
 export type TransferProgressMap = Record<string, TransferProgressPayload>;
 
+export interface TransferSnapshotEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number | null;
+  modifiedAt?: number | null;
+}
+
+export interface TransferSnapshotWithEntries<TEntry extends TransferSnapshotEntry> {
+  cwd: string;
+  entries: TEntry[];
+}
+
 export interface FileOverwriteDecision {
   exists: boolean;
   overwrite: boolean;
@@ -69,6 +82,102 @@ export function mergeTransferProgress(
     ...current,
     [next.transferId]: next,
   };
+}
+
+function getSnapshotPathSeparator(directory: string, pathSeparator?: string): string {
+  if (pathSeparator) {
+    return pathSeparator;
+  }
+  return directory.includes("\\") && !directory.includes("/") ? "\\" : "/";
+}
+
+function joinSnapshotFilePath(
+  directory: string,
+  fileName: string,
+  pathSeparator?: string
+): string {
+  const separator = getSnapshotPathSeparator(directory, pathSeparator);
+  if (!directory || directory.endsWith("/") || directory.endsWith("\\")) {
+    return `${directory}${fileName}`;
+  }
+  return `${directory}${separator}${fileName}`;
+}
+
+function sortSnapshotEntries<TEntry extends TransferSnapshotEntry>(
+  entries: TEntry[]
+): TEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) {
+      return a.isDirectory ? -1 : 1;
+    }
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  });
+}
+
+export function updateSnapshotEntrySizeFromProgress<
+  TEntry extends TransferSnapshotEntry,
+  TSnapshot extends TransferSnapshotWithEntries<TEntry>,
+>(
+  snapshot: TSnapshot | null,
+  {
+    fileName,
+    targetDir,
+    bytesTransferred,
+    pathSeparator,
+  }: {
+    fileName: string;
+    targetDir: string;
+    bytesTransferred: number;
+    pathSeparator?: string;
+  }
+): TSnapshot | null {
+  if (!snapshot || snapshot.cwd !== targetDir || !fileName) {
+    return snapshot;
+  }
+
+  const nextSize =
+    Number.isFinite(bytesTransferred) && bytesTransferred > 0 ? bytesTransferred : 0;
+  const existingIndex = snapshot.entries.findIndex(
+    (entry) => !entry.isDirectory && entry.name === fileName
+  );
+
+  if (existingIndex >= 0) {
+    return {
+      ...snapshot,
+      entries: snapshot.entries.map((entry, index) =>
+        index === existingIndex ? { ...entry, size: nextSize } : entry
+      ),
+    };
+  }
+
+  const nextEntry = {
+    name: fileName,
+    path: joinSnapshotFilePath(snapshot.cwd, fileName, pathSeparator),
+    isDirectory: false,
+    size: nextSize,
+    modifiedAt: null,
+  } as TEntry;
+
+  return {
+    ...snapshot,
+    entries: sortSnapshotEntries([...snapshot.entries, nextEntry]),
+  };
+}
+
+export function resolveTransferDisplayBytes({
+  status,
+  totalBytes,
+  progress,
+}: {
+  status: TransferStatus;
+  totalBytes: number;
+  progress?: TransferProgressPayload | null;
+}): number {
+  if (status === "running") {
+    const transferred = progress?.bytesTransferred ?? 0;
+    return Number.isFinite(transferred) && transferred > 0 ? transferred : 0;
+  }
+  return Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : 0;
 }
 
 export function clampProgress(value: number): number {

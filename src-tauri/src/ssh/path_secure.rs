@@ -12,6 +12,7 @@ pub fn validate_remote_abs_path_for_exec(p: &str) -> Result<String, String> {
 }
 
 /// 解析 `ls -1Ap` 输出（目录名以 `/` 结尾）。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_ls_1ap(listing: &str) -> Vec<RemoteFileEntry> {
     let mut out = Vec::new();
     for line in listing.lines() {
@@ -43,6 +44,79 @@ pub fn parse_ls_1ap(listing: &str) -> Vec<RemoteFileEntry> {
             .then_with(|| a.name.cmp(&b.name))
     });
     out
+}
+
+/// 解析 `ls -lnAp` 输出，包含文件大小；目录名以 `/` 结尾。
+pub fn parse_ls_ln_ap(listing: &str) -> Vec<RemoteFileEntry> {
+    let mut out = Vec::new();
+    for line in listing.lines() {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() || line.starts_with("total ") {
+            continue;
+        }
+        let Some((mode, size, name)) = parse_ls_long_line(line) else {
+            continue;
+        };
+        let is_directory = mode.starts_with('d') || name.ends_with('/');
+        let name = name.trim_end_matches('/').trim();
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        out.push(RemoteFileEntry {
+            name: name.to_string(),
+            path: String::new(),
+            is_directory,
+            size: if is_directory { None } else { Some(size) },
+            modified_at: None,
+        });
+    }
+    out.sort_by(|a, b| {
+        a.is_directory
+            .cmp(&b.is_directory)
+            .reverse()
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
+fn parse_ls_long_line(line: &str) -> Option<(&str, u64, &str)> {
+    let mut fields = Vec::with_capacity(8);
+    let mut index = 0;
+
+    while fields.len() < 8 {
+        let start = next_non_whitespace(line, index)?;
+        let end = next_whitespace(line, start);
+        fields.push(&line[start..end]);
+        index = end;
+    }
+
+    let name_start = next_non_whitespace(line, index)?;
+    let size = fields.get(4)?.parse::<u64>().ok()?;
+    Some((fields[0], size, line[name_start..].trim_end()))
+}
+
+fn next_non_whitespace(s: &str, start: usize) -> Option<usize> {
+    s.get(start..)?.char_indices().find_map(|(offset, ch)| {
+        if ch.is_whitespace() {
+            None
+        } else {
+            Some(start + offset)
+        }
+    })
+}
+
+fn next_whitespace(s: &str, start: usize) -> usize {
+    s.get(start..)
+        .and_then(|tail| {
+            tail.char_indices().find_map(|(offset, ch)| {
+                if ch.is_whitespace() {
+                    Some(start + offset)
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or(s.len())
 }
 
 /// 将路径放在 POSIX 单引号内，供 `sh -c` 拼接命令使用。
@@ -180,5 +254,23 @@ mod tests {
         assert!(v[0].is_directory);
         assert_eq!(v[1].name, "a.txt");
         assert!(!v[1].is_directory);
+    }
+
+    #[test]
+    fn parse_ls_ln_ap_reads_file_sizes() {
+        let raw = "total 16\n\
+drwxr-xr-x 2 1000 1000 4096 Jun 18 10:00 docs/\n\
+-rw-r--r-- 1 1000 1000 1536 Jun 18 10:01 report.txt\n\
+-rw-r--r-- 1 1000 1000 2048 Jun 18 10:02 name with spaces.log\n";
+        let v = parse_ls_ln_ap(raw);
+
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].name, "docs");
+        assert!(v[0].is_directory);
+        assert_eq!(v[0].size, None);
+        assert_eq!(v[1].name, "name with spaces.log");
+        assert_eq!(v[1].size, Some(2048));
+        assert_eq!(v[2].name, "report.txt");
+        assert_eq!(v[2].size, Some(1536));
     }
 }

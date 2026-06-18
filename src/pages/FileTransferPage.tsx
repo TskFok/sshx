@@ -27,6 +27,8 @@ import {
   formatTransferSpeed,
   mergeTransferProgress,
   resolveFileOverwriteDecision,
+  resolveTransferDisplayBytes,
+  updateSnapshotEntrySizeFromProgress,
   type TransferDirection,
   type TransferProgressMap,
   type TransferProgressPayload,
@@ -142,6 +144,7 @@ export function FileTransferPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [transferBusy, setTransferBusy] = useState(false);
   const [activeTransfer, setActiveTransfer] = useState<ActiveTransfer | null>(null);
+  const activeTransferRef = useRef<ActiveTransfer | null>(null);
   const [progressMap, setProgressMap] = useState<TransferProgressMap>({});
   const [authPrompt, setAuthPrompt] = useState<AuthPromptData | null>(null);
   const [authResponses, setAuthResponses] = useState<string[]>([]);
@@ -274,7 +277,38 @@ export function FileTransferPage() {
   useEffect(() => {
     let unlistenProgress: UnlistenFn | null = null;
     void listen<TransferProgressPayload>("file-transfer-progress", (event) => {
-      setProgressMap((current) => mergeTransferProgress(current, event.payload));
+      const progress = event.payload;
+      setProgressMap((current) => mergeTransferProgress(current, progress));
+
+      const transfer = activeTransferRef.current;
+      if (
+        !transfer ||
+        transfer.id !== progress.transferId ||
+        progress.status === "failed"
+      ) {
+        return;
+      }
+
+      const nextSize =
+        progress.status === "success" ? progress.totalBytes : progress.bytesTransferred;
+      if (transfer.direction === "upload") {
+        setRemoteSnapshot((snapshot) =>
+          updateSnapshotEntrySizeFromProgress(snapshot, {
+            fileName: transfer.fileName,
+            targetDir: transfer.remoteDir,
+            bytesTransferred: nextSize,
+            pathSeparator: "/",
+          })
+        );
+      } else {
+        setLocalSnapshot((snapshot) =>
+          updateSnapshotEntrySizeFromProgress(snapshot, {
+            fileName: transfer.fileName,
+            targetDir: transfer.localDir,
+            bytesTransferred: nextSize,
+          })
+        );
+      }
     }).then((unlisten) => {
       unlistenProgress = unlisten;
     });
@@ -362,14 +396,16 @@ export function FileTransferPage() {
 
     const transferId = generateId();
     setTransferBusy(true);
-    setActiveTransfer({
+    const nextTransfer: ActiveTransfer = {
       id: transferId,
       direction: "upload",
       fileName: selectedLocal.name,
       localDir: localSnapshot?.cwd ?? "",
       remoteDir: remoteSnapshot.cwd,
       totalBytes: selectedLocal.size ?? 0,
-    });
+    };
+    activeTransferRef.current = nextTransfer;
+    setActiveTransfer(nextTransfer);
     try {
       await invoke("file_transfer_upload", {
         request: {
@@ -388,6 +424,7 @@ export function FileTransferPage() {
       await loadHistory();
     } finally {
       setTransferBusy(false);
+      activeTransferRef.current = null;
       setActiveTransfer(null);
     }
   };
@@ -412,14 +449,16 @@ export function FileTransferPage() {
 
     const transferId = generateId();
     setTransferBusy(true);
-    setActiveTransfer({
+    const nextTransfer: ActiveTransfer = {
       id: transferId,
       direction: "download",
       fileName: selectedRemote.name,
       localDir: localSnapshot.cwd,
       remoteDir: remoteSnapshot?.cwd ?? "",
       totalBytes: selectedRemote.size ?? 0,
-    });
+    };
+    activeTransferRef.current = nextTransfer;
+    setActiveTransfer(nextTransfer);
     try {
       await invoke("file_transfer_download", {
         request: {
@@ -438,6 +477,7 @@ export function FileTransferPage() {
       await loadHistory();
     } finally {
       setTransferBusy(false);
+      activeTransferRef.current = null;
       setActiveTransfer(null);
     }
   };
@@ -542,7 +582,11 @@ export function FileTransferPage() {
                   status="running"
                   localDir={activeTransfer.localDir}
                   remoteDir={activeTransfer.remoteDir}
-                  totalBytes={activeTransfer.totalBytes}
+                  totalBytes={resolveTransferDisplayBytes({
+                    status: "running",
+                    totalBytes: activeTransfer.totalBytes,
+                    progress: activeProgress,
+                  })}
                   progress={activeProgress?.progress ?? 0}
                   speedBps={activeProgress?.speedBps ?? 0}
                   durationMs={null}
@@ -564,7 +608,11 @@ export function FileTransferPage() {
                   status={item.status}
                   localDir={item.localDir}
                   remoteDir={item.remoteDir}
-                  totalBytes={item.totalBytes}
+                  totalBytes={resolveTransferDisplayBytes({
+                    status: item.status,
+                    totalBytes: item.totalBytes,
+                    progress: progressMap[item.id] ?? null,
+                  })}
                   progress={item.status === "success" ? 100 : progressMap[item.id]?.progress ?? 0}
                   speedBps={item.averageSpeedBps ?? progressMap[item.id]?.speedBps ?? 0}
                   durationMs={item.durationMs ?? null}

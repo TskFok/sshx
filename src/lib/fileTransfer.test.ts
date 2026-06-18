@@ -5,6 +5,8 @@ import {
   formatTransferSpeed,
   hasSameNameFile,
   mergeTransferProgress,
+  resolveTransferDisplayBytes,
+  updateSnapshotEntrySizeFromProgress,
   type TransferProgressPayload,
 } from "./fileTransfer";
 
@@ -56,6 +58,96 @@ describe("fileTransfer helpers", () => {
       progress: 25,
       status: "running",
     });
+  });
+
+  it("传输进度会更新当前目标目录中文件大小", () => {
+    const snapshot = {
+      cwd: "/home/alice",
+      entries: [
+        {
+          name: "report.txt",
+          path: "/home/alice/report.txt",
+          isDirectory: false,
+          size: 0,
+          modifiedAt: null,
+        },
+      ],
+    };
+
+    const updated = updateSnapshotEntrySizeFromProgress(snapshot, {
+      fileName: "report.txt",
+      targetDir: "/home/alice",
+      bytesTransferred: 512,
+    });
+
+    expect(updated?.entries[0].size).toBe(512);
+  });
+
+  it("传输进度会把新目标文件临时加入当前目录", () => {
+    const snapshot = {
+      cwd: "/home/alice",
+      entries: [
+        {
+          name: "docs",
+          path: "/home/alice/docs",
+          isDirectory: true,
+          size: null,
+          modifiedAt: null,
+        },
+      ],
+    };
+
+    const updated = updateSnapshotEntrySizeFromProgress(snapshot, {
+      fileName: "report.txt",
+      targetDir: "/home/alice",
+      bytesTransferred: 1024,
+    });
+
+    expect(updated?.entries).toContainEqual({
+      name: "report.txt",
+      path: "/home/alice/report.txt",
+      isDirectory: false,
+      size: 1024,
+      modifiedAt: null,
+    });
+  });
+
+  it("运行中的传输大小优先显示已传输字节数", () => {
+    expect(
+      resolveTransferDisplayBytes({
+        status: "running",
+        totalBytes: 0,
+        progress: {
+          transferId: "download-1",
+          direction: "download",
+          bytesTransferred: 4096,
+          totalBytes: 8192,
+          speedBps: 1024,
+          progress: 50,
+          status: "running",
+          message: null,
+        },
+      })
+    ).toBe(4096);
+  });
+
+  it("已完成的传输大小显示最终文件大小", () => {
+    expect(
+      resolveTransferDisplayBytes({
+        status: "success",
+        totalBytes: 8192,
+        progress: {
+          transferId: "download-1",
+          direction: "download",
+          bytesTransferred: 4096,
+          totalBytes: 8192,
+          speedBps: 1024,
+          progress: 50,
+          status: "running",
+          message: null,
+        },
+      })
+    ).toBe(8192);
   });
 
   it("检测同名文件时忽略目录", () => {
