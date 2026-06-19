@@ -1,0 +1,72 @@
+import type React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+async function importMainLayoutForRoute(
+  pathname: string,
+  scrollContainer: { scrollTop: number }
+) {
+  vi.resetModules();
+  vi.doMock("react", async () => {
+    const actual = await vi.importActual<typeof import("react")>("react");
+
+    return {
+      ...actual,
+      useLayoutEffect: (effect: () => void) => effect(),
+      useRef: () => ({ current: scrollContainer }),
+    };
+  });
+  vi.doMock("react-router-dom", () => ({
+    Outlet: () => null,
+    useLocation: () => ({ pathname }),
+  }));
+  vi.doMock("./Sidebar", () => ({
+    Sidebar: () => null,
+  }));
+  vi.doMock("./Header", () => ({
+    Header: () => null,
+  }));
+  vi.doMock("@/components/ui/tooltip", () => ({
+    TooltipProvider: ({ children }: { children: React.ReactNode }) => children,
+  }));
+  vi.doMock("@/pages/TerminalPage", () => ({
+    TerminalPage: () => null,
+  }));
+
+  return import("./MainLayout");
+}
+
+describe("MainLayout scroll restoration", () => {
+  afterEach(() => {
+    vi.doUnmock("react");
+    vi.doUnmock("react-router-dom");
+    vi.doUnmock("./Sidebar");
+    vi.doUnmock("./Header");
+    vi.doUnmock("@/components/ui/tooltip");
+    vi.doUnmock("@/pages/TerminalPage");
+    vi.resetModules();
+  });
+
+  it("resets the reused page scroll container to the top on route changes", async () => {
+    const scrollContainer = { scrollTop: 320 };
+    const { MainLayout } = await importMainLayoutForRoute(
+      "/file-transfer/conn-1",
+      scrollContainer
+    );
+
+    MainLayout();
+
+    expect(scrollContainer.scrollTop).toBe(0);
+  });
+
+  it("keeps the terminal route from touching the hidden page scroll container", async () => {
+    const scrollContainer = { scrollTop: 320 };
+    const { MainLayout } = await importMainLayoutForRoute(
+      "/terminal",
+      scrollContainer
+    );
+
+    MainLayout();
+
+    expect(scrollContainer.scrollTop).toBe(320);
+  });
+});
