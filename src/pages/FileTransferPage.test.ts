@@ -88,6 +88,20 @@ describe("FileTransferPage", () => {
     expect(html).toContain('aria-label="远程文件搜索当前目录"');
   });
 
+  it("renders manual path inputs for local and remote panels", () => {
+    const html = renderFileTransferPage();
+
+    expect(html).toContain('aria-label="本地文件手动输入目录路径"');
+    expect(html).toContain('aria-label="远程文件手动输入目录路径"');
+  });
+
+  it("renders path jump actions for local and remote panels", () => {
+    const html = renderFileTransferPage();
+
+    expect(html).toContain('aria-label="本地文件跳转到输入目录"');
+    expect(html).toContain('aria-label="远程文件跳转到输入目录"');
+  });
+
   it("renders transfer actions with selected file counts", () => {
     const html = renderFileTransferPage();
 

@@ -148,6 +148,8 @@ export function FileTransferPage() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [localSnapshot, setLocalSnapshot] = useState<LocalDirSnapshot | null>(null);
   const [remoteSnapshot, setRemoteSnapshot] = useState<RemoteDirSnapshot | null>(null);
+  const [localPathInput, setLocalPathInput] = useState("");
+  const [remotePathInput, setRemotePathInput] = useState("");
   const [localSearch, setLocalSearch] = useState("");
   const [remoteSearch, setRemoteSearch] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
@@ -193,6 +195,14 @@ export function FileTransferPage() {
     setRemoteSearch(value);
     setSelectedRemotePaths([]);
   }, []);
+
+  useEffect(() => {
+    setLocalPathInput(localSnapshot?.cwd ?? "");
+  }, [localSnapshot?.cwd]);
+
+  useEffect(() => {
+    setRemotePathInput(remoteSnapshot?.cwd ?? "");
+  }, [remoteSnapshot?.cwd]);
 
   const loadConnections = useCallback(async () => {
     try {
@@ -575,6 +585,18 @@ export function FileTransferPage() {
     }
   }, [cancelingTransferId]);
 
+  const jumpToLocalPath = useCallback(async () => {
+    await loadLocalDir(localPathInput.trim() || null);
+  }, [loadLocalDir, localPathInput]);
+
+  const jumpToRemotePath = useCallback(async () => {
+    const path = remotePathInput.trim();
+    if (!path) {
+      return;
+    }
+    await loadRemoteDir(path);
+  }, [loadRemoteDir, remotePathInput]);
+
   const chooseLocalDir = async () => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") {
@@ -598,6 +620,11 @@ export function FileTransferPage() {
           snapshot={localSnapshot}
           loading={localLoading}
           selectedPaths={selectedLocalPaths}
+          pathValue={localPathInput}
+          onPathChange={setLocalPathInput}
+          onPathSubmit={() => void jumpToLocalPath()}
+          pathDisabled={localLoading}
+          pathSubmitDisabled={localLoading}
           searchValue={localSearch}
           onSearchChange={handleLocalSearchChange}
           onSelect={(entry) => {
@@ -631,6 +658,11 @@ export function FileTransferPage() {
           snapshot={remoteSnapshot}
           loading={remoteLoading || (!sessionId && !connectionError)}
           selectedPaths={selectedRemotePaths}
+          pathValue={remotePathInput}
+          onPathChange={setRemotePathInput}
+          onPathSubmit={() => void jumpToRemotePath()}
+          pathDisabled={remoteLoading || !sessionId}
+          pathSubmitDisabled={remoteLoading || !sessionId || !remotePathInput.trim()}
           searchValue={remoteSearch}
           onSearchChange={handleRemoteSearchChange}
           onSelect={(entry) => {
@@ -744,6 +776,11 @@ function FilePanel({
   snapshot,
   loading,
   selectedPaths,
+  pathValue,
+  onPathChange,
+  onPathSubmit,
+  pathDisabled,
+  pathSubmitDisabled,
   searchValue,
   onSearchChange,
   onSelect,
@@ -757,6 +794,11 @@ function FilePanel({
   snapshot: LocalDirSnapshot | RemoteDirSnapshot | null;
   loading: boolean;
   selectedPaths: string[];
+  pathValue: string;
+  onPathChange: (value: string) => void;
+  onPathSubmit: () => void;
+  pathDisabled: boolean;
+  pathSubmitDisabled: boolean;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSelect: (entry: FileEntry) => void;
@@ -807,6 +849,34 @@ function FilePanel({
         <p className={layoutClasses.infoBar}>
           {snapshot?.cwd ?? "加载中"}
         </p>
+        <form
+          className="flex min-w-0 gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!pathSubmitDisabled) {
+              onPathSubmit();
+            }
+          }}
+        >
+          <Input
+            className="h-9 min-w-0 font-mono"
+            value={pathValue}
+            onChange={(event) => onPathChange(event.target.value)}
+            placeholder={`输入${title}目录路径`}
+            aria-label={`${title}手动输入目录路径`}
+            disabled={pathDisabled}
+          />
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            aria-label={`${title}跳转到输入目录`}
+            disabled={pathSubmitDisabled}
+          >
+            跳转
+          </Button>
+        </form>
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
