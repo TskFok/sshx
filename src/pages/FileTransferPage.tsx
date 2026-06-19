@@ -635,13 +635,19 @@ export function FileTransferPage() {
           onParent={() => void loadLocalDir(localSnapshot?.parent ?? null)}
           parentDisabled={!localSnapshot?.parent}
           footer={
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={chooseLocalDir}>
+            <div className={layoutClasses.footerActions}>
+              <Button
+                variant="outline"
+                size="sm"
+                className={layoutClasses.footerActionButton}
+                onClick={chooseLocalDir}
+              >
                 <FolderOpen className="mr-2 h-4 w-4" />
                 选择目录
               </Button>
               <Button
                 size="sm"
+                className={layoutClasses.footerActionButton}
                 disabled={selectedLocalFiles.length === 0 || transferBusy || !sessionId}
                 onClick={() => void uploadSelected()}
               >
@@ -678,14 +684,17 @@ export function FileTransferPage() {
           }}
           parentDisabled={!remoteSnapshot || !remoteParent(remoteSnapshot.cwd)}
           footer={
-            <Button
-              size="sm"
-              disabled={selectedRemoteFiles.length === 0 || transferBusy || !sessionId}
-              onClick={() => void downloadSelected()}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              下载 {selectedRemoteFiles.length} 个文件
-            </Button>
+            <div className={layoutClasses.footerActions}>
+              <Button
+                size="sm"
+                className={layoutClasses.footerActionButton}
+                disabled={selectedRemoteFiles.length === 0 || transferBusy || !sessionId}
+                onClick={() => void downloadSelected()}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                下载 {selectedRemoteFiles.length} 个文件
+              </Button>
+            </div>
           }
         />
       </div>
@@ -814,7 +823,7 @@ function FilePanel({
   );
 
   return (
-    <Card className="min-h-0">
+    <Card className={layoutClasses.card}>
       <CardHeader className={layoutClasses.header}>
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="flex min-w-0 items-center gap-2 text-base">
