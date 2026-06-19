@@ -84,6 +84,16 @@ export function mergeTransferProgress(
   };
 }
 
+export function toggleSelectedFilePath(
+  selectedPaths: string[],
+  path: string
+): string[] {
+  if (selectedPaths.includes(path)) {
+    return selectedPaths.filter((item) => item !== path);
+  }
+  return [...selectedPaths, path];
+}
+
 export function filterFileEntriesBySearch<TEntry extends Pick<TransferSnapshotEntry, "name">>(
   entries: TEntry[],
   search: string

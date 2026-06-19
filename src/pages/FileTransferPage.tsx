@@ -31,6 +31,7 @@ import {
   mergeTransferProgress,
   resolveFileOverwriteDecision,
   resolveTransferDisplayBytes,
+  toggleSelectedFilePath,
   updateSnapshotEntrySizeFromProgress,
   type TransferDirection,
   type TransferProgressMap,
@@ -151,8 +152,8 @@ export function FileTransferPage() {
   const [remoteSearch, setRemoteSearch] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
   const [remoteLoading, setRemoteLoading] = useState(false);
-  const [selectedLocalPath, setSelectedLocalPath] = useState<string | null>(null);
-  const [selectedRemotePath, setSelectedRemotePath] = useState<string | null>(null);
+  const [selectedLocalPaths, setSelectedLocalPaths] = useState<string[]>([]);
+  const [selectedRemotePaths, setSelectedRemotePaths] = useState<string[]>([]);
   const [history, setHistory] = useState<FileTransferHistory[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [transferBusy, setTransferBusy] = useState(false);
@@ -167,22 +168,30 @@ export function FileTransferPage() {
     () => connections.find((item) => item.id === connectionId),
     [connections, connectionId]
   );
-  const selectedLocal = localSnapshot?.entries.find(
-    (entry) => entry.path === selectedLocalPath
+  const selectedLocalFiles = useMemo(
+    () =>
+      selectedLocalPaths
+        .map((path) => localSnapshot?.entries.find((entry) => entry.path === path))
+        .filter((entry): entry is FileEntry => Boolean(entry && !entry.isDirectory)),
+    [localSnapshot?.entries, selectedLocalPaths]
   );
-  const selectedRemote = remoteSnapshot?.entries.find(
-    (entry) => entry.path === selectedRemotePath
+  const selectedRemoteFiles = useMemo(
+    () =>
+      selectedRemotePaths
+        .map((path) => remoteSnapshot?.entries.find((entry) => entry.path === path))
+        .filter((entry): entry is FileEntry => Boolean(entry && !entry.isDirectory)),
+    [remoteSnapshot?.entries, selectedRemotePaths]
   );
   const activeProgress = activeTransfer ? progressMap[activeTransfer.id] : null;
 
   const handleLocalSearchChange = useCallback((value: string) => {
     setLocalSearch(value);
-    setSelectedLocalPath(null);
+    setSelectedLocalPaths([]);
   }, []);
 
   const handleRemoteSearchChange = useCallback((value: string) => {
     setRemoteSearch(value);
-    setSelectedRemotePath(null);
+    setSelectedRemotePaths([]);
   }, []);
 
   const loadConnections = useCallback(async () => {
@@ -209,7 +218,7 @@ export function FileTransferPage() {
           request: { path: path ?? null },
         });
         setLocalSnapshot(snapshot);
-        setSelectedLocalPath(null);
+        setSelectedLocalPaths([]);
       } catch (error) {
         setConnectionError(typeof error === "string" ? error : String(error));
       } finally {
@@ -234,7 +243,7 @@ export function FileTransferPage() {
           }
         );
         setRemoteSnapshot(snapshot);
-        setSelectedRemotePath(null);
+        setSelectedRemotePaths([]);
       } catch (error) {
         setConnectionError(typeof error === "string" ? error : String(error));
       } finally {
@@ -410,52 +419,65 @@ export function FileTransferPage() {
   }, [connectionId, connection, setupAuthPromptListener, loadRemoteDir]);
 
   const uploadSelected = async () => {
-    if (!selectedLocal || selectedLocal.isDirectory || !remoteSnapshot || !sessionId || !connectionId) {
+    if (selectedLocalFiles.length === 0 || !remoteSnapshot || !sessionId || !connectionId) {
       return;
     }
-    const overwriteDecision = await resolveFileOverwriteDecision({
-      entries: remoteSnapshot.entries,
-      fileName: selectedLocal.name,
-      message: `远程目录已存在 ${selectedLocal.name}，是否覆盖？`,
-      confirmOverwrite: (message) =>
-        confirmDialog(message, {
-          title: "确认覆盖",
-          kind: "warning",
-          okLabel: "覆盖",
-          cancelLabel: "取消",
-        }),
-    });
-    if (!overwriteDecision.shouldContinue) return;
-
-    const transferId = generateId();
     setTransferBusy(true);
-    const nextTransfer: ActiveTransfer = {
-      id: transferId,
-      direction: "upload",
-      fileName: selectedLocal.name,
-      localDir: localSnapshot?.cwd ?? "",
-      remoteDir: remoteSnapshot.cwd,
-      totalBytes: selectedLocal.size ?? 0,
-    };
-    activeTransferRef.current = nextTransfer;
-    setActiveTransfer(nextTransfer);
+    const remoteDir = remoteSnapshot.cwd;
+    const localDir = localSnapshot?.cwd ?? "";
+    let wasCancelled = false;
     try {
-      await invoke("file_transfer_upload", {
-        request: {
-          transferId,
-          sessionId,
-          connectionId,
-          localPath: selectedLocal.path,
-          remoteDir: remoteSnapshot.cwd,
-          overwrite: overwriteDecision.overwrite,
-        },
-      });
-      await loadRemoteDir(remoteSnapshot.cwd);
-      await loadHistory();
-    } catch (error) {
-      const message = typeof error === "string" ? error : String(error);
-      if (message !== TRANSFER_CANCELLED_MESSAGE) {
-        setConnectionError(message);
+      for (const file of selectedLocalFiles) {
+        const overwriteDecision = await resolveFileOverwriteDecision({
+          entries: remoteSnapshot.entries,
+          fileName: file.name,
+          message: `远程目录已存在 ${file.name}，是否覆盖？`,
+          confirmOverwrite: (message) =>
+            confirmDialog(message, {
+              title: "确认覆盖",
+              kind: "warning",
+              okLabel: "覆盖",
+              cancelLabel: "取消",
+            }),
+        });
+        if (!overwriteDecision.shouldContinue) {
+          continue;
+        }
+
+        const transferId = generateId();
+        const nextTransfer: ActiveTransfer = {
+          id: transferId,
+          direction: "upload",
+          fileName: file.name,
+          localDir,
+          remoteDir,
+          totalBytes: file.size ?? 0,
+        };
+        activeTransferRef.current = nextTransfer;
+        setActiveTransfer(nextTransfer);
+        try {
+          await invoke("file_transfer_upload", {
+            request: {
+              transferId,
+              sessionId,
+              connectionId,
+              localPath: file.path,
+              remoteDir,
+              overwrite: overwriteDecision.overwrite,
+            },
+          });
+        } catch (error) {
+          const message = typeof error === "string" ? error : String(error);
+          if (message === TRANSFER_CANCELLED_MESSAGE) {
+            wasCancelled = true;
+            break;
+          }
+          setConnectionError(message);
+        }
+      }
+
+      if (!wasCancelled) {
+        await loadRemoteDir(remoteDir);
       }
       await loadHistory();
     } finally {
@@ -467,52 +489,65 @@ export function FileTransferPage() {
   };
 
   const downloadSelected = async () => {
-    if (!selectedRemote || selectedRemote.isDirectory || !localSnapshot || !sessionId || !connectionId) {
+    if (selectedRemoteFiles.length === 0 || !localSnapshot || !sessionId || !connectionId) {
       return;
     }
-    const overwriteDecision = await resolveFileOverwriteDecision({
-      entries: localSnapshot.entries,
-      fileName: selectedRemote.name,
-      message: `本地目录已存在 ${selectedRemote.name}，是否覆盖？`,
-      confirmOverwrite: (message) =>
-        confirmDialog(message, {
-          title: "确认覆盖",
-          kind: "warning",
-          okLabel: "覆盖",
-          cancelLabel: "取消",
-        }),
-    });
-    if (!overwriteDecision.shouldContinue) return;
-
-    const transferId = generateId();
     setTransferBusy(true);
-    const nextTransfer: ActiveTransfer = {
-      id: transferId,
-      direction: "download",
-      fileName: selectedRemote.name,
-      localDir: localSnapshot.cwd,
-      remoteDir: remoteSnapshot?.cwd ?? "",
-      totalBytes: selectedRemote.size ?? 0,
-    };
-    activeTransferRef.current = nextTransfer;
-    setActiveTransfer(nextTransfer);
+    const localDir = localSnapshot.cwd;
+    const remoteDir = remoteSnapshot?.cwd ?? "";
+    let wasCancelled = false;
     try {
-      await invoke("file_transfer_download", {
-        request: {
-          transferId,
-          sessionId,
-          connectionId,
-          remotePath: selectedRemote.path,
-          localDir: localSnapshot.cwd,
-          overwrite: overwriteDecision.overwrite,
-        },
-      });
-      await loadLocalDir(localSnapshot.cwd);
-      await loadHistory();
-    } catch (error) {
-      const message = typeof error === "string" ? error : String(error);
-      if (message !== TRANSFER_CANCELLED_MESSAGE) {
-        setConnectionError(message);
+      for (const file of selectedRemoteFiles) {
+        const overwriteDecision = await resolveFileOverwriteDecision({
+          entries: localSnapshot.entries,
+          fileName: file.name,
+          message: `本地目录已存在 ${file.name}，是否覆盖？`,
+          confirmOverwrite: (message) =>
+            confirmDialog(message, {
+              title: "确认覆盖",
+              kind: "warning",
+              okLabel: "覆盖",
+              cancelLabel: "取消",
+            }),
+        });
+        if (!overwriteDecision.shouldContinue) {
+          continue;
+        }
+
+        const transferId = generateId();
+        const nextTransfer: ActiveTransfer = {
+          id: transferId,
+          direction: "download",
+          fileName: file.name,
+          localDir,
+          remoteDir,
+          totalBytes: file.size ?? 0,
+        };
+        activeTransferRef.current = nextTransfer;
+        setActiveTransfer(nextTransfer);
+        try {
+          await invoke("file_transfer_download", {
+            request: {
+              transferId,
+              sessionId,
+              connectionId,
+              remotePath: file.path,
+              localDir,
+              overwrite: overwriteDecision.overwrite,
+            },
+          });
+        } catch (error) {
+          const message = typeof error === "string" ? error : String(error);
+          if (message === TRANSFER_CANCELLED_MESSAGE) {
+            wasCancelled = true;
+            break;
+          }
+          setConnectionError(message);
+        }
+      }
+
+      if (!wasCancelled) {
+        await loadLocalDir(localDir);
       }
       await loadHistory();
     } finally {
@@ -562,12 +597,12 @@ export function FileTransferPage() {
           icon={HardDrive}
           snapshot={localSnapshot}
           loading={localLoading}
-          selectedPath={selectedLocalPath}
+          selectedPaths={selectedLocalPaths}
           searchValue={localSearch}
           onSearchChange={handleLocalSearchChange}
           onSelect={(entry) => {
             if (entry.isDirectory) void loadLocalDir(entry.path);
-            else setSelectedLocalPath(entry.path);
+            else setSelectedLocalPaths((current) => toggleSelectedFilePath(current, entry.path));
           }}
           onRefresh={() => void loadLocalDir(localSnapshot?.cwd ?? null, { keepSearch: true })}
           onParent={() => void loadLocalDir(localSnapshot?.parent ?? null)}
@@ -580,11 +615,11 @@ export function FileTransferPage() {
               </Button>
               <Button
                 size="sm"
-                disabled={!selectedLocal || selectedLocal.isDirectory || transferBusy || !sessionId}
+                disabled={selectedLocalFiles.length === 0 || transferBusy || !sessionId}
                 onClick={() => void uploadSelected()}
               >
                 <Upload className="mr-2 h-4 w-4" />
-                上传选中文件
+                上传 {selectedLocalFiles.length} 个文件
               </Button>
             </div>
           }
@@ -595,12 +630,12 @@ export function FileTransferPage() {
           icon={Server}
           snapshot={remoteSnapshot}
           loading={remoteLoading || (!sessionId && !connectionError)}
-          selectedPath={selectedRemotePath}
+          selectedPaths={selectedRemotePaths}
           searchValue={remoteSearch}
           onSearchChange={handleRemoteSearchChange}
           onSelect={(entry) => {
             if (entry.isDirectory) void loadRemoteDir(entry.path);
-            else setSelectedRemotePath(entry.path);
+            else setSelectedRemotePaths((current) => toggleSelectedFilePath(current, entry.path));
           }}
           onRefresh={() =>
             remoteSnapshot && void loadRemoteDir(remoteSnapshot.cwd, { keepSearch: true })
@@ -613,11 +648,11 @@ export function FileTransferPage() {
           footer={
             <Button
               size="sm"
-              disabled={!selectedRemote || selectedRemote.isDirectory || transferBusy || !sessionId}
+              disabled={selectedRemoteFiles.length === 0 || transferBusy || !sessionId}
               onClick={() => void downloadSelected()}
             >
               <Download className="mr-2 h-4 w-4" />
-              下载选中文件
+              下载 {selectedRemoteFiles.length} 个文件
             </Button>
           }
         />
@@ -708,7 +743,7 @@ function FilePanel({
   icon: Icon,
   snapshot,
   loading,
-  selectedPath,
+  selectedPaths,
   searchValue,
   onSearchChange,
   onSelect,
@@ -721,7 +756,7 @@ function FilePanel({
   icon: typeof HardDrive;
   snapshot: LocalDirSnapshot | RemoteDirSnapshot | null;
   loading: boolean;
-  selectedPath: string | null;
+  selectedPaths: string[];
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSelect: (entry: FileEntry) => void;
@@ -813,7 +848,7 @@ function FilePanel({
                   type="button"
                   className={cn(
                     "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
-                    selectedPath === entry.path && "bg-primary/10 text-primary"
+                    selectedPaths.includes(entry.path) && "bg-primary/10 text-primary"
                   )}
                   onClick={() => onSelect(entry)}
                 >

@@ -7,6 +7,7 @@ import {
   hasSameNameFile,
   mergeTransferProgress,
   resolveTransferDisplayBytes,
+  toggleSelectedFilePath,
   updateSnapshotEntrySizeFromProgress,
   type TransferProgressPayload,
 } from "./fileTransfer";
@@ -59,6 +60,16 @@ describe("fileTransfer helpers", () => {
       progress: 25,
       status: "running",
     });
+  });
+
+  it("点击文件路径时按点击顺序切换多选状态", () => {
+    const first = toggleSelectedFilePath([], "/tmp/a.txt");
+    const second = toggleSelectedFilePath(first, "/tmp/b.txt");
+    const third = toggleSelectedFilePath(second, "/tmp/a.txt");
+
+    expect(first).toEqual(["/tmp/a.txt"]);
+    expect(second).toEqual(["/tmp/a.txt", "/tmp/b.txt"]);
+    expect(third).toEqual(["/tmp/b.txt"]);
   });
 
   it("传输进度会更新当前目标目录中文件大小", () => {

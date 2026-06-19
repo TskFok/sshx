@@ -88,6 +88,13 @@ describe("FileTransferPage", () => {
     expect(html).toContain('aria-label="远程文件搜索当前目录"');
   });
 
+  it("renders transfer actions with selected file counts", () => {
+    const html = renderFileTransferPage();
+
+    expect(html).toContain("上传 0 个文件");
+    expect(html).toContain("下载 0 个文件");
+  });
+
   it("renders a cancel action for a running transfer row", () => {
     const html = renderToStaticMarkup(
       React.createElement(HistoryRow, {
