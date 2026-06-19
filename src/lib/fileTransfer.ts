@@ -84,6 +84,18 @@ export function mergeTransferProgress(
   };
 }
 
+export function filterFileEntriesBySearch<TEntry extends Pick<TransferSnapshotEntry, "name">>(
+  entries: TEntry[],
+  search: string
+): TEntry[] {
+  const query = search.trim().toLowerCase();
+  if (!query) {
+    return entries;
+  }
+
+  return entries.filter((entry) => entry.name.toLowerCase().includes(query));
+}
+
 function getSnapshotPathSeparator(directory: string, pathSeparator?: string): string {
   if (pathSeparator) {
     return pathSeparator;

@@ -80,4 +80,11 @@ describe("FileTransferPage", () => {
     expect(html).toContain("远程文件");
     expect(html).toContain("加载中");
   });
+
+  it("renders separate search inputs for local and remote panels", () => {
+    const html = renderFileTransferPage();
+
+    expect(html).toContain('aria-label="本地文件搜索当前目录"');
+    expect(html).toContain('aria-label="远程文件搜索当前目录"');
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterFileEntriesBySearch,
   resolveFileOverwriteDecision,
   formatTransferBytes,
   formatTransferSpeed,
@@ -184,6 +185,30 @@ describe("fileTransfer helpers", () => {
       shouldContinue: true,
     });
     expect(messages).toEqual(["本地目录已存在 report.txt，是否覆盖？"]);
+  });
+
+  it("按当前目录条目名称过滤文件和目录", () => {
+    const entries = [
+      {
+        name: "Reports",
+        path: "/home/alice/Reports",
+        isDirectory: true,
+      },
+      {
+        name: "deploy.log",
+        path: "/home/alice/deploy.log",
+        isDirectory: false,
+      },
+      {
+        name: "notes.txt",
+        path: "/home/alice/notes.txt",
+        isDirectory: false,
+      },
+    ];
+
+    expect(filterFileEntriesBySearch(entries, "repo")).toEqual([entries[0]]);
+    expect(filterFileEntriesBySearch(entries, "LOG")).toEqual([entries[1]]);
+    expect(filterFileEntriesBySearch(entries, "  ")).toEqual(entries);
   });
 
   it("取消覆盖确认时中止传输", async () => {

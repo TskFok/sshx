@@ -12,6 +12,7 @@ import {
   HardDrive,
   Loader2,
   RefreshCw,
+  Search,
   Server,
   Upload,
   XCircle,
@@ -20,9 +21,11 @@ import { AuthPromptDialog, type AuthPromptData } from "@/components/ssh/AuthProm
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore, type ConnectionGroup, type ConnectionInfo } from "@/store";
 import {
+  filterFileEntriesBySearch,
   formatTransferBytes,
   formatTransferSpeed,
   mergeTransferProgress,
@@ -136,6 +139,8 @@ export function FileTransferPage() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [localSnapshot, setLocalSnapshot] = useState<LocalDirSnapshot | null>(null);
   const [remoteSnapshot, setRemoteSnapshot] = useState<RemoteDirSnapshot | null>(null);
+  const [localSearch, setLocalSearch] = useState("");
+  const [remoteSearch, setRemoteSearch] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [selectedLocalPath, setSelectedLocalPath] = useState<string | null>(null);
@@ -161,6 +166,16 @@ export function FileTransferPage() {
   );
   const activeProgress = activeTransfer ? progressMap[activeTransfer.id] : null;
 
+  const handleLocalSearchChange = useCallback((value: string) => {
+    setLocalSearch(value);
+    setSelectedLocalPath(null);
+  }, []);
+
+  const handleRemoteSearchChange = useCallback((value: string) => {
+    setRemoteSearch(value);
+    setSelectedRemotePath(null);
+  }, []);
+
   const loadConnections = useCallback(async () => {
     try {
       const [conns, groups] = await Promise.all([
@@ -174,25 +189,34 @@ export function FileTransferPage() {
     }
   }, [setConnections, setGroups]);
 
-  const loadLocalDir = useCallback(async (path?: string | null) => {
-    setLocalLoading(true);
-    try {
-      const snapshot = await invoke<LocalDirSnapshot>("file_transfer_list_local_dir", {
-        request: { path: path ?? null },
-      });
-      setLocalSnapshot(snapshot);
-      setSelectedLocalPath(null);
-    } catch (error) {
-      setConnectionError(typeof error === "string" ? error : String(error));
-    } finally {
-      setLocalLoading(false);
-    }
-  }, []);
+  const loadLocalDir = useCallback(
+    async (path?: string | null, options?: { keepSearch?: boolean }) => {
+      setLocalLoading(true);
+      if (!options?.keepSearch) {
+        setLocalSearch("");
+      }
+      try {
+        const snapshot = await invoke<LocalDirSnapshot>("file_transfer_list_local_dir", {
+          request: { path: path ?? null },
+        });
+        setLocalSnapshot(snapshot);
+        setSelectedLocalPath(null);
+      } catch (error) {
+        setConnectionError(typeof error === "string" ? error : String(error));
+      } finally {
+        setLocalLoading(false);
+      }
+    },
+    []
+  );
 
   const loadRemoteDir = useCallback(
-    async (path: string) => {
+    async (path: string, options?: { keepSearch?: boolean }) => {
       if (!sessionIdRef.current) return;
       setRemoteLoading(true);
+      if (!options?.keepSearch) {
+        setRemoteSearch("");
+      }
       try {
         const snapshot = await invoke<RemoteDirSnapshot>(
           "file_transfer_list_remote_dir",
@@ -505,11 +529,13 @@ export function FileTransferPage() {
           snapshot={localSnapshot}
           loading={localLoading}
           selectedPath={selectedLocalPath}
+          searchValue={localSearch}
+          onSearchChange={handleLocalSearchChange}
           onSelect={(entry) => {
             if (entry.isDirectory) void loadLocalDir(entry.path);
             else setSelectedLocalPath(entry.path);
           }}
-          onRefresh={() => void loadLocalDir(localSnapshot?.cwd ?? null)}
+          onRefresh={() => void loadLocalDir(localSnapshot?.cwd ?? null, { keepSearch: true })}
           onParent={() => void loadLocalDir(localSnapshot?.parent ?? null)}
           parentDisabled={!localSnapshot?.parent}
           footer={
@@ -536,11 +562,15 @@ export function FileTransferPage() {
           snapshot={remoteSnapshot}
           loading={remoteLoading || (!sessionId && !connectionError)}
           selectedPath={selectedRemotePath}
+          searchValue={remoteSearch}
+          onSearchChange={handleRemoteSearchChange}
           onSelect={(entry) => {
             if (entry.isDirectory) void loadRemoteDir(entry.path);
             else setSelectedRemotePath(entry.path);
           }}
-          onRefresh={() => remoteSnapshot && void loadRemoteDir(remoteSnapshot.cwd)}
+          onRefresh={() =>
+            remoteSnapshot && void loadRemoteDir(remoteSnapshot.cwd, { keepSearch: true })
+          }
           onParent={() => {
             const parent = remoteSnapshot ? remoteParent(remoteSnapshot.cwd) : null;
             if (parent) void loadRemoteDir(parent);
@@ -643,6 +673,8 @@ function FilePanel({
   snapshot,
   loading,
   selectedPath,
+  searchValue,
+  onSearchChange,
   onSelect,
   onRefresh,
   onParent,
@@ -654,6 +686,8 @@ function FilePanel({
   snapshot: LocalDirSnapshot | RemoteDirSnapshot | null;
   loading: boolean;
   selectedPath: string | null;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
   onSelect: (entry: FileEntry) => void;
   onRefresh: () => void;
   onParent: () => void;
@@ -661,6 +695,10 @@ function FilePanel({
   footer: React.ReactNode;
 }) {
   const layoutClasses = getFilePanelLayoutClasses();
+  const filteredEntries = useMemo(
+    () => (snapshot ? filterFileEntriesBySearch(snapshot.entries, searchValue) : []),
+    [snapshot, searchValue]
+  );
 
   return (
     <Card className="min-h-0">
@@ -698,6 +736,17 @@ function FilePanel({
         <p className={layoutClasses.infoBar}>
           {snapshot?.cwd ?? "加载中"}
         </p>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="h-9 pl-8"
+            value={searchValue}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder={`搜索${title}当前目录`}
+            aria-label={`${title}搜索当前目录`}
+            disabled={loading || !snapshot}
+          />
+        </div>
       </CardHeader>
       <CardContent className={layoutClasses.content}>
         <ScrollArea className={layoutClasses.list}>
@@ -712,9 +761,17 @@ function FilePanel({
               目录为空
             </div>
           )}
-          {!loading && snapshot && snapshot.entries.length > 0 && (
+          {!loading &&
+            snapshot &&
+            snapshot.entries.length > 0 &&
+            filteredEntries.length === 0 && (
+              <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
+                没有匹配的文件或目录
+              </div>
+            )}
+          {!loading && snapshot && filteredEntries.length > 0 && (
             <div className="space-y-1">
-              {snapshot.entries.map((entry) => (
+              {filteredEntries.map((entry) => (
                 <button
                   key={entry.path}
                   type="button"
