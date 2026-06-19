@@ -365,7 +365,15 @@ impl SshSession {
                 continue;
             }
             let meta = entry.metadata();
-            let is_directory = entry.file_type().is_dir();
+            let file_type = entry.file_type();
+            let is_directory = file_type.is_dir();
+            let permissions = meta.permissions.map(|_| {
+                format!(
+                    "{}{}",
+                    if is_directory { "d" } else { "-" },
+                    meta.permissions()
+                )
+            });
             entries.push(RemoteFileEntry {
                 path: format!("{}/{}", cwd.trim_end_matches('/'), name),
                 name,
@@ -376,6 +384,7 @@ impl SshSession {
                     .ok()
                     .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|duration| duration.as_secs() as i64),
+                permissions,
             });
         }
         entries.sort_by(|a, b| {

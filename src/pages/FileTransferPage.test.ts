@@ -2,6 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Server } from "lucide-react";
 import { useAppStore, type ConnectionInfo } from "@/store";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -17,7 +18,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-import { FileTransferPage, HistoryRow } from "./FileTransferPage";
+import { FilePanel, FileTransferPage, HistoryRow } from "./FileTransferPage";
 
 const connection: ConnectionInfo = {
   id: "conn-1",
@@ -79,6 +80,45 @@ describe("FileTransferPage", () => {
     expect(html).toContain("本地文件");
     expect(html).toContain("远程文件");
     expect(html).toContain("加载中");
+  });
+
+  it("renders permissions in the remote file panel", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(FilePanel, {
+        title: "远程文件",
+        icon: Server,
+        snapshot: {
+          cwd: "/home/alice",
+          entries: [
+            {
+              name: "secret.tar",
+              path: "/home/alice/secret.tar",
+              isDirectory: false,
+              size: 1024,
+              modifiedAt: null,
+              permissions: "-rw-------",
+            },
+          ],
+        },
+        loading: false,
+        selectedPaths: [],
+        pathValue: "/home/alice",
+        onPathChange: () => {},
+        onPathSubmit: () => {},
+        pathDisabled: false,
+        pathSubmitDisabled: false,
+        searchValue: "",
+        onSearchChange: () => {},
+        onSelect: () => {},
+        onRefresh: () => {},
+        onParent: () => {},
+        parentDisabled: false,
+        footer: null,
+        showPermissions: true,
+      })
+    );
+
+    expect(html).toContain("-rw-------");
   });
 
   it("renders separate search inputs for local and remote panels", () => {

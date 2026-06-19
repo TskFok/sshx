@@ -50,6 +50,7 @@ interface FileEntry {
   isDirectory: boolean;
   size?: number | null;
   modifiedAt?: number | null;
+  permissions?: string | null;
 }
 
 interface LocalDirSnapshot {
@@ -662,6 +663,7 @@ export function FileTransferPage() {
           title="远程文件"
           icon={Server}
           snapshot={remoteSnapshot}
+          showPermissions
           loading={remoteLoading || (!sessionId && !connectionError)}
           selectedPaths={selectedRemotePaths}
           pathValue={remotePathInput}
@@ -779,10 +781,11 @@ export function FileTransferPage() {
   );
 }
 
-function FilePanel({
+export function FilePanel({
   title,
   icon: Icon,
   snapshot,
+  showPermissions = false,
   loading,
   selectedPaths,
   pathValue,
@@ -801,6 +804,7 @@ function FilePanel({
   title: string;
   icon: typeof HardDrive;
   snapshot: LocalDirSnapshot | RemoteDirSnapshot | null;
+  showPermissions?: boolean;
   loading: boolean;
   selectedPaths: string[];
   pathValue: string;
@@ -939,6 +943,14 @@ function FilePanel({
                   <span className="min-w-0 flex-1 truncate font-mono">
                     {entry.name}
                   </span>
+                  {showPermissions && entry.permissions && (
+                    <span
+                      className="shrink-0 font-mono text-xs text-muted-foreground"
+                      title={`权限：${entry.permissions}`}
+                    >
+                      {entry.permissions}
+                    </span>
+                  )}
                   {!entry.isDirectory && (
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {formatTransferBytes(entry.size ?? 0)}

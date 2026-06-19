@@ -35,6 +35,7 @@ pub fn parse_ls_1ap(listing: &str) -> Vec<RemoteFileEntry> {
             is_directory: is_dir,
             size: None,
             modified_at: None,
+            permissions: None,
         });
     }
     out.sort_by(|a, b| {
@@ -68,6 +69,7 @@ pub fn parse_ls_ln_ap(listing: &str) -> Vec<RemoteFileEntry> {
             is_directory,
             size: if is_directory { None } else { Some(size) },
             modified_at: None,
+            permissions: Some(mode.to_string()),
         });
     }
     out.sort_by(|a, b| {
@@ -270,7 +272,9 @@ drwxr-xr-x 2 1000 1000 4096 Jun 18 10:00 docs/\n\
         assert_eq!(v[0].size, None);
         assert_eq!(v[1].name, "name with spaces.log");
         assert_eq!(v[1].size, Some(2048));
+        assert_eq!(v[1].permissions.as_deref(), Some("-rw-r--r--"));
         assert_eq!(v[2].name, "report.txt");
         assert_eq!(v[2].size, Some(1536));
+        assert_eq!(v[2].permissions.as_deref(), Some("-rw-r--r--"));
     }
 }

@@ -269,6 +269,8 @@ pub struct RemoteFileEntry {
     pub size: Option<u64>,
     #[serde(default)]
     pub modified_at: Option<i64>,
+    #[serde(default)]
+    pub permissions: Option<String>,
 }
 
 /// 远程 shell 当前目录下的条目（由 `pwd` + `ls` 得到，与交互 shell 状态一致）。
