@@ -88,11 +88,16 @@ describe("FileTransferPage", () => {
     expect(html).toContain('aria-label="远程文件搜索当前目录"');
   });
 
-  it("renders manual path inputs for local and remote panels", () => {
+  it("renders editable current directory address bars for local and remote panels", () => {
     const html = renderFileTransferPage();
 
-    expect(html).toContain('aria-label="本地文件手动输入目录路径"');
-    expect(html).toContain('aria-label="远程文件手动输入目录路径"');
+    expect(html).toContain('aria-label="本地文件当前目录地址栏"');
+    expect(html).toContain('aria-label="远程文件当前目录地址栏"');
+    expect(html).not.toContain('aria-label="本地文件手动输入目录路径"');
+    expect(html).not.toContain('aria-label="远程文件手动输入目录路径"');
+    expect(html).not.toContain(
+      '<p class="truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">'
+    );
   });
 
   it("renders path jump actions for local and remote panels", () => {

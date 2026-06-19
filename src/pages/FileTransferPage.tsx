@@ -846,9 +846,6 @@ function FilePanel({
             </Button>
           </div>
         </div>
-        <p className={layoutClasses.infoBar}>
-          {snapshot?.cwd ?? "加载中"}
-        </p>
         <form
           className="flex min-w-0 gap-2"
           onSubmit={(event) => {
@@ -859,11 +856,14 @@ function FilePanel({
           }}
         >
           <Input
-            className="h-9 min-w-0 font-mono"
+            className={cn(
+              layoutClasses.infoBar,
+              "h-8 min-w-0 flex-1 border-0 py-1 text-foreground shadow-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
+            )}
             value={pathValue}
             onChange={(event) => onPathChange(event.target.value)}
-            placeholder={`输入${title}目录路径`}
-            aria-label={`${title}手动输入目录路径`}
+            placeholder={snapshot?.cwd ?? "加载中"}
+            aria-label={`${title}当前目录地址栏`}
             disabled={pathDisabled}
           />
           <Button
