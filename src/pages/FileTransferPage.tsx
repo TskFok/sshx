@@ -89,6 +89,8 @@ interface ActiveTransfer {
   totalBytes: number;
 }
 
+const TRANSFER_CANCELLED_MESSAGE = "传输已中断";
+
 function generateId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -108,8 +110,14 @@ function remoteParent(path: string): string | null {
   return trimmed.slice(0, index);
 }
 
-function historyStatusLabel(status: FileTransferHistory["status"]): string {
+function historyStatusLabel(
+  status: FileTransferHistory["status"],
+  errorMessage?: string | null
+): string {
   if (status === "success") return "成功";
+  if (status === "failed" && errorMessage === TRANSFER_CANCELLED_MESSAGE) {
+    return "已中断";
+  }
   if (status === "failed") return "失败";
   return "传输中";
 }
@@ -150,6 +158,7 @@ export function FileTransferPage() {
   const [transferBusy, setTransferBusy] = useState(false);
   const [activeTransfer, setActiveTransfer] = useState<ActiveTransfer | null>(null);
   const activeTransferRef = useRef<ActiveTransfer | null>(null);
+  const [cancelingTransferId, setCancelingTransferId] = useState<string | null>(null);
   const [progressMap, setProgressMap] = useState<TransferProgressMap>({});
   const [authPrompt, setAuthPrompt] = useState<AuthPromptData | null>(null);
   const [authResponses, setAuthResponses] = useState<string[]>([]);
@@ -444,10 +453,14 @@ export function FileTransferPage() {
       await loadRemoteDir(remoteSnapshot.cwd);
       await loadHistory();
     } catch (error) {
-      setConnectionError(typeof error === "string" ? error : String(error));
+      const message = typeof error === "string" ? error : String(error);
+      if (message !== TRANSFER_CANCELLED_MESSAGE) {
+        setConnectionError(message);
+      }
       await loadHistory();
     } finally {
       setTransferBusy(false);
+      setCancelingTransferId(null);
       activeTransferRef.current = null;
       setActiveTransfer(null);
     }
@@ -497,14 +510,35 @@ export function FileTransferPage() {
       await loadLocalDir(localSnapshot.cwd);
       await loadHistory();
     } catch (error) {
-      setConnectionError(typeof error === "string" ? error : String(error));
+      const message = typeof error === "string" ? error : String(error);
+      if (message !== TRANSFER_CANCELLED_MESSAGE) {
+        setConnectionError(message);
+      }
       await loadHistory();
     } finally {
       setTransferBusy(false);
+      setCancelingTransferId(null);
       activeTransferRef.current = null;
       setActiveTransfer(null);
     }
   };
+
+  const cancelActiveTransfer = useCallback(async () => {
+    const transfer = activeTransferRef.current;
+    if (!transfer || cancelingTransferId) {
+      return;
+    }
+
+    setCancelingTransferId(transfer.id);
+    try {
+      await invoke("file_transfer_cancel", {
+        request: { transferId: transfer.id },
+      });
+    } catch (error) {
+      setCancelingTransferId(null);
+      setConnectionError(typeof error === "string" ? error : String(error));
+    }
+  }, [cancelingTransferId]);
 
   const chooseLocalDir = async () => {
     const selected = await open({ directory: true, multiple: false });
@@ -623,6 +657,8 @@ export function FileTransferPage() {
                   errorMessage={activeProgress?.message ?? null}
                   onLocalDir={() => void loadLocalDir(activeTransfer.localDir)}
                   onRemoteDir={() => void loadRemoteDir(activeTransfer.remoteDir)}
+                  onCancelTransfer={() => void cancelActiveTransfer()}
+                  cancelDisabled={cancelingTransferId === activeTransfer.id}
                 />
               )}
               {history.length === 0 && !activeTransfer && (
@@ -805,7 +841,7 @@ function FilePanel({
   );
 }
 
-function HistoryRow({
+export function HistoryRow({
   name,
   direction,
   status,
@@ -818,6 +854,8 @@ function HistoryRow({
   errorMessage,
   onLocalDir,
   onRemoteDir,
+  onCancelTransfer,
+  cancelDisabled = false,
 }: {
   name: string;
   direction: TransferDirection;
@@ -831,6 +869,8 @@ function HistoryRow({
   errorMessage: string | null;
   onLocalDir: () => void;
   onRemoteDir: () => void;
+  onCancelTransfer?: () => void;
+  cancelDisabled?: boolean;
 }) {
   const safeProgress = Math.max(0, Math.min(100, progress));
   const historyLayoutClasses = getFileTransferHistoryLayoutClasses();
@@ -841,7 +881,7 @@ function HistoryRow({
         <div className={historyLayoutClasses.details}>
           <div className={historyLayoutClasses.summary}>
             <Badge variant={status === "failed" ? "destructive" : "secondary"}>
-              {historyStatusLabel(status)}
+              {historyStatusLabel(status, errorMessage)}
             </Badge>
             <span className="shrink-0 text-sm font-medium">
               {directionLabel(direction)}
@@ -850,6 +890,20 @@ function HistoryRow({
             <span className={historyLayoutClasses.fileSize}>
               {formatTransferBytes(totalBytes)}
             </span>
+            {status === "running" && onCancelTransfer && (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="h-7 shrink-0 px-2"
+                aria-label={`中断传输 ${name}`}
+                disabled={cancelDisabled}
+                onClick={onCancelTransfer}
+              >
+                <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                {cancelDisabled ? "正在中断" : "中断"}
+              </Button>
+            )}
           </div>
           <div className={historyLayoutClasses.pathGrid}>
             <button

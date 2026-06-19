@@ -17,7 +17,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-import { FileTransferPage } from "./FileTransferPage";
+import { FileTransferPage, HistoryRow } from "./FileTransferPage";
 
 const connection: ConnectionInfo = {
   id: "conn-1",
@@ -86,5 +86,29 @@ describe("FileTransferPage", () => {
 
     expect(html).toContain('aria-label="本地文件搜索当前目录"');
     expect(html).toContain('aria-label="远程文件搜索当前目录"');
+  });
+
+  it("renders a cancel action for a running transfer row", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(HistoryRow, {
+        name: "large.tar",
+        direction: "upload",
+        status: "running",
+        localDir: "/tmp",
+        remoteDir: "/home/alice",
+        totalBytes: 1024,
+        progress: 25,
+        speedBps: 128,
+        durationMs: null,
+        errorMessage: null,
+        onLocalDir: () => {},
+        onRemoteDir: () => {},
+        onCancelTransfer: () => {},
+        cancelDisabled: false,
+      })
+    );
+
+    expect(html).toContain("中断");
+    expect(html).toContain('aria-label="中断传输 large.tar"');
   });
 });

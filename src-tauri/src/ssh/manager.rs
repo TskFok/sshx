@@ -1,5 +1,6 @@
 use super::session::SshSession;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -187,6 +188,7 @@ impl SessionManager {
         remote_name: &str,
         local_path: &std::path::Path,
         total_bytes: u64,
+        cancel_flag: Arc<AtomicBool>,
         progress: F,
     ) -> Result<(), String>
     where
@@ -202,6 +204,7 @@ impl SessionManager {
                 remote_name,
                 local_path,
                 total_bytes,
+                cancel_flag,
                 progress,
             )
             .await
@@ -214,6 +217,7 @@ impl SessionManager {
         remote_name: &str,
         local_path: &std::path::Path,
         total_bytes: u64,
+        cancel_flag: Arc<AtomicBool>,
         progress: F,
     ) -> Result<(), String>
     where
@@ -229,6 +233,7 @@ impl SessionManager {
                 remote_name,
                 local_path,
                 total_bytes,
+                cancel_flag,
                 progress,
             )
             .await

@@ -3,6 +3,8 @@ pub(super) enum SessionCmd {
     Resize { cols: u32, rows: u32 },
 }
 
+pub(super) const TRANSFER_CANCELLED_MESSAGE: &str = "传输已中断";
+
 #[cfg(target_os = "macos")]
 mod openssh;
 #[cfg(target_os = "macos")]

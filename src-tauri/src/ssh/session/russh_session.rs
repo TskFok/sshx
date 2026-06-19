@@ -1,9 +1,11 @@
-use super::SessionCmd;
+use super::{SessionCmd, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::ClientHandler;
 use russh::client::Handle;
 use russh::ChannelId;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
@@ -117,8 +119,15 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        self.sftp_upload_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
-            .await
+        self.sftp_upload_with_progress(
+            remote_base_dir,
+            remote_name,
+            local_path,
+            0,
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
     }
 
     pub async fn sftp_upload_with_progress<F>(
@@ -127,6 +136,7 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
         _total_bytes: u64,
+        cancel_flag: Arc<AtomicBool>,
         mut progress: F,
     ) -> Result<(), String>
     where
@@ -183,6 +193,9 @@ impl SshSession {
         let mut buf = vec![0u8; 65536];
         let mut transferred = 0_u64;
         loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
+            }
             let n = local
                 .read(&mut buf)
                 .await
@@ -190,11 +203,17 @@ impl SshSession {
             if n == 0 {
                 break;
             }
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
+            }
             file.write_all(&buf[..n])
                 .await
                 .map_err(|e| format!("写入远程失败: {e}"))?;
             transferred = transferred.saturating_add(n as u64);
             progress(transferred);
+        }
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
         }
         file.flush()
             .await
@@ -210,8 +229,15 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        self.sftp_download_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
-            .await
+        self.sftp_download_with_progress(
+            remote_base_dir,
+            remote_name,
+            local_path,
+            0,
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
     }
 
     pub async fn sftp_download_with_progress<F>(
@@ -220,6 +246,7 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
         _total_bytes: u64,
+        cancel_flag: Arc<AtomicBool>,
         mut progress: F,
     ) -> Result<(), String>
     where
@@ -273,6 +300,9 @@ impl SshSession {
         let mut buf = vec![0u8; 65536];
         let mut transferred = 0_u64;
         loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
+            }
             let n = file
                 .read(&mut buf)
                 .await
@@ -280,12 +310,18 @@ impl SshSession {
             if n == 0 {
                 break;
             }
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
+            }
             local
                 .write_all(&buf[..n])
                 .await
                 .map_err(|e| format!("写入本地失败: {e}"))?;
             transferred = transferred.saturating_add(n as u64);
             progress(transferred);
+        }
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
         }
         local
             .flush()

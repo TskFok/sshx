@@ -1,7 +1,7 @@
 use crate::db::{file_transfer, Database};
 use crate::models::{
-    FileTransferDirection, FileTransferDownloadRequest, FileTransferHistory,
-    FileTransferListHistoryRequest, FileTransferListLocalDirRequest,
+    FileTransferCancelRequest, FileTransferDirection, FileTransferDownloadRequest,
+    FileTransferHistory, FileTransferListHistoryRequest, FileTransferListLocalDirRequest,
     FileTransferListRemoteDirRequest, FileTransferProgressPayload, FileTransferStatus,
     FileTransferUploadRequest, LocalDirSnapshot, LocalFileEntry, RemoteDirSnapshot,
 };
@@ -9,11 +9,76 @@ use crate::ssh::manager::SessionManager;
 use crate::ssh::path_secure::{
     join_remote_relative, validate_remote_abs_path_for_exec, validate_remote_relative,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
 
 const FILE_TRANSFER_PROGRESS_EVENT: &str = "file-transfer-progress";
+
+#[derive(Clone)]
+pub struct TransferCancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl TransferCancellationToken {
+    #[cfg(test)]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancelled)
+    }
+}
+
+pub struct TransferCancellationManager {
+    transfers: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl TransferCancellationManager {
+    pub fn new() -> Self {
+        Self {
+            transfers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn register(&self, transfer_id: &str) -> Result<TransferCancellationToken, String> {
+        validate_transfer_id(transfer_id)?;
+        let mut transfers = self.transfers.lock().map_err(|e| e.to_string())?;
+        if transfers.contains_key(transfer_id) {
+            return Err("传输任务已在运行".to_string());
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        transfers.insert(transfer_id.to_string(), Arc::clone(&cancelled));
+        Ok(TransferCancellationToken { cancelled })
+    }
+
+    pub fn cancel(&self, transfer_id: &str) -> Result<bool, String> {
+        validate_transfer_id(transfer_id)?;
+        let transfers = self.transfers.lock().map_err(|e| e.to_string())?;
+        let Some(cancelled) = transfers.get(transfer_id) else {
+            return Ok(false);
+        };
+        cancelled.store(true, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    pub fn unregister(&self, transfer_id: &str) -> Result<(), String> {
+        let mut transfers = self.transfers.lock().map_err(|e| e.to_string())?;
+        transfers.remove(transfer_id);
+        Ok(())
+    }
+}
+
+impl Default for TransferCancellationManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[tauri::command]
 pub async fn file_transfer_list_local_dir(
@@ -41,6 +106,7 @@ pub async fn file_transfer_upload(
     app: AppHandle,
     db: State<'_, Database>,
     manager: State<'_, SessionManager>,
+    cancellations: State<'_, TransferCancellationManager>,
     request: FileTransferUploadRequest,
 ) -> Result<(), String> {
     validate_transfer_id(&request.transfer_id)?;
@@ -77,7 +143,8 @@ pub async fn file_transfer_upload(
     }
 
     let started_at = file_transfer::current_time_millis();
-    insert_running_history(
+    let cancel_token = cancellations.register(&request.transfer_id)?;
+    if let Err(err) = insert_running_history(
         &db,
         file_transfer::NewTransferHistory {
             id: request.transfer_id.clone(),
@@ -91,7 +158,10 @@ pub async fn file_transfer_upload(
             total_bytes,
             started_at,
         },
-    )?;
+    ) {
+        let _ = cancellations.unregister(&request.transfer_id);
+        return Err(err);
+    }
 
     let started = Instant::now();
     emit_progress(
@@ -115,6 +185,7 @@ pub async fn file_transfer_upload(
             &file_name,
             &local,
             total_bytes,
+            cancel_token.flag(),
             move |bytes| {
                 emit_running_progress(
                     &progress_app,
@@ -128,7 +199,7 @@ pub async fn file_transfer_upload(
         )
         .await;
 
-    finish_transfer(
+    let finish_result = finish_transfer(
         &app,
         &db,
         &request.transfer_id,
@@ -137,7 +208,9 @@ pub async fn file_transfer_upload(
         started_at,
         started,
         result,
-    )
+    );
+    let unregister_result = cancellations.unregister(&request.transfer_id);
+    finish_result.and(unregister_result)
 }
 
 #[tauri::command]
@@ -145,6 +218,7 @@ pub async fn file_transfer_download(
     app: AppHandle,
     db: State<'_, Database>,
     manager: State<'_, SessionManager>,
+    cancellations: State<'_, TransferCancellationManager>,
     request: FileTransferDownloadRequest,
 ) -> Result<(), String> {
     validate_transfer_id(&request.transfer_id)?;
@@ -174,7 +248,8 @@ pub async fn file_transfer_download(
         .to_string();
 
     let started_at = file_transfer::current_time_millis();
-    insert_running_history(
+    let cancel_token = cancellations.register(&request.transfer_id)?;
+    if let Err(err) = insert_running_history(
         &db,
         file_transfer::NewTransferHistory {
             id: request.transfer_id.clone(),
@@ -188,7 +263,10 @@ pub async fn file_transfer_download(
             total_bytes,
             started_at,
         },
-    )?;
+    ) {
+        let _ = cancellations.unregister(&request.transfer_id);
+        return Err(err);
+    }
 
     let started = Instant::now();
     emit_progress(
@@ -212,6 +290,7 @@ pub async fn file_transfer_download(
             &file_name,
             &local_path,
             total_bytes,
+            cancel_token.flag(),
             move |bytes| {
                 emit_running_progress(
                     &progress_app,
@@ -225,7 +304,7 @@ pub async fn file_transfer_download(
         )
         .await;
 
-    finish_transfer(
+    let finish_result = finish_transfer(
         &app,
         &db,
         &request.transfer_id,
@@ -234,7 +313,19 @@ pub async fn file_transfer_download(
         started_at,
         started,
         result,
-    )
+    );
+    let unregister_result = cancellations.unregister(&request.transfer_id);
+    finish_result.and(unregister_result)
+}
+
+#[tauri::command]
+pub async fn file_transfer_cancel(
+    cancellations: State<'_, TransferCancellationManager>,
+    request: FileTransferCancelRequest,
+) -> Result<(), String> {
+    validate_transfer_id(&request.transfer_id)?;
+    let _ = cancellations.cancel(&request.transfer_id)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -468,5 +559,26 @@ mod tests {
             split_remote_file_path("/home/u/a.txt").unwrap(),
             ("/home/u".to_string(), "a.txt".to_string())
         );
+    }
+
+    #[test]
+    fn transfer_cancellation_manager_marks_registered_transfer_cancelled() {
+        let manager = TransferCancellationManager::new();
+        let token = manager.register("transfer-1").unwrap();
+
+        assert!(!token.is_cancelled());
+        assert!(manager.cancel("transfer-1").unwrap());
+        assert!(token.is_cancelled());
+
+        manager.unregister("transfer-1").unwrap();
+        assert!(!manager.cancel("transfer-1").unwrap());
+    }
+
+    #[test]
+    fn transfer_cancellation_manager_rejects_duplicate_running_transfer() {
+        let manager = TransferCancellationManager::new();
+        let _token = manager.register("transfer-1").unwrap();
+
+        assert!(manager.register("transfer-1").is_err());
     }
 }

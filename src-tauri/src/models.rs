@@ -381,6 +381,12 @@ pub struct FileTransferDownloadRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileTransferCancelRequest {
+    pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileTransferListHistoryRequest {
     pub connection_id: String,
     pub limit: Option<u32>,

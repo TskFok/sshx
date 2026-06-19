@@ -11,6 +11,7 @@ use commands::{
     settings, sftp as sftp_commands, ssh as ssh_commands,
 };
 use db::Database;
+use file_transfer_commands::TransferCancellationManager;
 use ssh::manager::SessionManager;
 use ssh::prompt::AuthPromptManager;
 use tauri::Manager;
@@ -22,6 +23,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionManager::new())
         .manage(AuthPromptManager::new())
+        .manage(TransferCancellationManager::new())
         .invoke_handler(tauri::generate_handler![
             diagnostic_commands::diagnostic_logs_get,
             diagnostic_commands::diagnostic_logs_clear,
@@ -53,6 +55,7 @@ pub fn run() {
             file_transfer_commands::file_transfer_list_remote_dir,
             file_transfer_commands::file_transfer_upload,
             file_transfer_commands::file_transfer_download,
+            file_transfer_commands::file_transfer_cancel,
             file_transfer_commands::file_transfer_list_history,
             settings::get_settings,
             settings::update_settings,

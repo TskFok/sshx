@@ -1,12 +1,13 @@
 //! macOS：使用系统 `/usr/bin/ssh` 与子进程 PTY，替代 russh 协议栈。
 
-use super::SessionCmd;
+use super::{SessionCmd, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::AuthMethod;
 use crate::ssh::prompt::{AuthPromptManager, AuthPromptPayload, PromptItem};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -63,8 +64,15 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        self.sftp_upload_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
-            .await
+        self.sftp_upload_with_progress(
+            remote_base_dir,
+            remote_name,
+            local_path,
+            0,
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
     }
 
     pub async fn sftp_upload_with_progress<F>(
@@ -73,6 +81,7 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
         total_bytes: u64,
+        cancel_flag: Arc<AtomicBool>,
         progress: F,
     ) -> Result<(), String>
     where
@@ -114,6 +123,7 @@ impl SshSession {
                 &dest,
                 &batch,
                 total_bytes,
+                cancel_flag,
                 Some(progress_probe),
                 progress,
             )
@@ -128,8 +138,15 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        self.sftp_download_with_progress(remote_base_dir, remote_name, local_path, 0, |_| {})
-            .await
+        self.sftp_download_with_progress(
+            remote_base_dir,
+            remote_name,
+            local_path,
+            0,
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
     }
 
     pub async fn sftp_download_with_progress<F>(
@@ -138,6 +155,7 @@ impl SshSession {
         remote_name: &str,
         local_path: &std::path::Path,
         total_bytes: u64,
+        cancel_flag: Arc<AtomicBool>,
         progress: F,
     ) -> Result<(), String>
     where
@@ -176,6 +194,7 @@ impl SshSession {
                 &dest,
                 &batch,
                 total_bytes,
+                cancel_flag,
                 Some(progress_probe),
                 progress,
             )
@@ -586,6 +605,7 @@ fn run_sftp_with_batch_progress<F>(
     destination: &str,
     batch: &str,
     total_bytes: u64,
+    cancel_flag: Arc<AtomicBool>,
     mut progress_probe: Option<ProgressProbe>,
     mut progress: F,
 ) -> Result<(), String>
@@ -640,6 +660,7 @@ where
     let mut last_reported = 0_u64;
     let mut last_probe_at = Instant::now();
     let status;
+    let mut cancelled = false;
     loop {
         drain_sftp_output(
             &output_rx,
@@ -648,6 +669,11 @@ where
             total_bytes,
             &mut progress,
         );
+
+        if cancel_flag.load(Ordering::SeqCst) {
+            cancelled = true;
+            let _ = child.kill();
+        }
 
         if last_probe_at.elapsed() >= SFTP_PROGRESS_POLL_INTERVAL {
             if let Some(probe) = progress_probe.as_mut() {
@@ -678,6 +704,9 @@ where
         &mut progress,
     );
     let _ = std::fs::remove_file(&batch_path);
+    if cancelled {
+        return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
+    }
     if status.success() {
         progress(total_bytes);
         Ok(())
@@ -1606,6 +1635,7 @@ mod tests {
             "dummy",
             "!sleep 1\n",
             100,
+            Arc::new(AtomicBool::new(false)),
             Some(progress_probe),
             |bytes| events.push(bytes),
         );
