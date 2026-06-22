@@ -79,19 +79,32 @@ pnpm tauri build
 
 ### 发布到 GitHub Releases
 
-项目提供手动触发的 GitHub Actions 发布流程。发布前请先确保以下版本号一致：
+项目提供一键发布命令，会自动递增版本、提交版本变更、推送当前分支，并触发 GitHub Actions `Release` workflow：
+
+```bash
+# 默认递增 patch，例如 0.1.0 -> 0.1.1
+pnpm release
+
+# 递增 minor，例如 0.1.0 -> 0.2.0
+pnpm release -- minor
+
+# 递增 major，例如 0.1.0 -> 1.0.0
+pnpm release -- major
+```
+
+发布命令要求运行前工作区是干净的，并且本机已安装、登录 GitHub CLI（`gh`）。命令会同步更新以下版本号文件：
 
 - `package.json`
 - `src-tauri/tauri.conf.json`
 - `src-tauri/Cargo.toml`
 
-本地校验当前版本：
+如需只校验当前版本一致性，可运行：
 
 ```bash
 pnpm release:check -- 0.1.0
 ```
 
-校验通过并推送到 GitHub 后，在 GitHub Actions 中运行 `Release` workflow，输入同一个不带 `v` 前缀的版本号。工作流会在 macOS、Windows、Linux 上构建安装包，构建全部成功后自动创建 `v<version>` tag，并将产物发布到 [GitHub Releases](https://github.com/TskFok/sshx/releases)。
+发布 workflow 会在 macOS、Windows、Linux 上构建安装包，构建全部成功后自动创建 `v<version>` tag，并将产物发布到 [GitHub Releases](https://github.com/TskFok/sshx/releases)。
 
 ## 开发检查
 
