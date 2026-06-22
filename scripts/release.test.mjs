@@ -20,9 +20,22 @@ describe("release command", () => {
   });
 
   it("parses release args with patch as the default bump type", () => {
-    expect(parseReleaseArgs([])).toEqual({ bumpType: "patch" });
-    expect(parseReleaseArgs(["minor"])).toEqual({ bumpType: "minor" });
-    expect(parseReleaseArgs(["--", "major"])).toEqual({ bumpType: "major" });
+    expect(parseReleaseArgs([])).toEqual({
+      bumpType: "patch",
+      useCurrentVersion: false,
+    });
+    expect(parseReleaseArgs(["minor"])).toEqual({
+      bumpType: "minor",
+      useCurrentVersion: false,
+    });
+    expect(parseReleaseArgs(["--", "major"])).toEqual({
+      bumpType: "major",
+      useCurrentVersion: false,
+    });
+    expect(parseReleaseArgs(["current"])).toEqual({
+      bumpType: "patch",
+      useCurrentVersion: true,
+    });
   });
 
   it("rejects unknown bump types", () => {
@@ -91,7 +104,7 @@ serde = { version = "1" }
     });
   });
 
-  it("commits, pushes, and triggers the Release workflow for the next version", async () => {
+  it("commits, pushes, and triggers the Release workflow by pushing a tag", async () => {
     const commands = [];
     const writes = [];
     const files = {
@@ -122,6 +135,13 @@ version = "0.1.0"
         ) {
           return "main\n";
         }
+        if (
+          command === "git" &&
+          args.join(" ") ===
+            "ls-remote --tags origin refs/tags/v0.2.0"
+        ) {
+          return "";
+        }
         return "";
       },
     });
@@ -139,6 +159,7 @@ version = "0.1.0"
     expect(commands).toEqual([
       ["git", ["status", "--porcelain"]],
       ["git", ["branch", "--show-current"]],
+      ["git", ["ls-remote", "--tags", "origin", "refs/tags/v0.2.0"]],
       [
         "git",
         [
@@ -150,18 +171,66 @@ version = "0.1.0"
       ],
       ["git", ["commit", "-m", "发布版本 v0.2.0"]],
       ["git", ["push", "origin", "main"]],
-      [
-        "gh",
-        [
-          "workflow",
-          "run",
-          "Release",
-          "-f",
-          "version=0.2.0",
-          "--ref",
-          "main",
-        ],
-      ],
+      ["git", ["tag", "-a", "v0.2.0", "-m", "发布 SSHX v0.2.0"]],
+      ["git", ["push", "origin", "refs/tags/v0.2.0"]],
+    ]);
+  });
+
+  it("can trigger the current version without bumping or committing", async () => {
+    const commands = [];
+    const writes = [];
+    const files = {
+      "package.json": JSON.stringify({ version: "0.1.1" }, null, 2),
+      "src-tauri/tauri.conf.json": JSON.stringify(
+        { version: "0.1.1" },
+        null,
+        2,
+      ),
+      "src-tauri/Cargo.toml": `[package]
+version = "0.1.1"
+`,
+    };
+
+    const result = await runRelease({
+      argv: ["current"],
+      cwd: "/repo",
+      readFile: (path) => files[path],
+      writeFile: (path, content) => writes.push([path, content]),
+      runCommand: async (command, args) => {
+        commands.push([command, args]);
+        if (command === "git" && args.join(" ") === "status --porcelain") {
+          return "";
+        }
+        if (
+          command === "git" &&
+          args.join(" ") === "branch --show-current"
+        ) {
+          return "main\n";
+        }
+        if (
+          command === "git" &&
+          args.join(" ") ===
+            "ls-remote --tags origin refs/tags/v0.1.1"
+        ) {
+          return "";
+        }
+        return "";
+      },
+    });
+
+    expect(result).toEqual({
+      version: "0.1.1",
+      tag: "v0.1.1",
+      branch: "main",
+    });
+    expect(writes).toEqual([]);
+    expect(commands).toEqual([
+      ["git", ["status", "--porcelain"]],
+      ["git", ["branch", "--show-current"]],
+      ["git", ["ls-remote", "--tags", "origin", "refs/tags/v0.1.1"]],
+      ["git", ["push", "origin", "main"]],
+      ["git", ["tag", "-a", "v0.1.1", "-m", "发布 SSHX v0.1.1"]],
+      ["git", ["push", "origin", "refs/tags/v0.1.1"]],
     ]);
   });
 });

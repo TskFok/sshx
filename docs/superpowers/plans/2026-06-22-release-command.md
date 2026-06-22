@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `pnpm release` to bump SSHX versions, commit and push the version update, then trigger the GitHub Actions `Release` workflow.
+**Goal:** Add `pnpm release` to bump SSHX versions, commit and push the version update, then trigger the GitHub Actions `Release` workflow by pushing a release tag.
 
 **Architecture:** Create a focused Node ESM script under `scripts/` that reuses the existing release version validation helpers. Keep pure version/file update logic exported for Vitest and isolate side-effecting git/gh execution behind an injectable command runner.
 
-**Tech Stack:** Node.js ESM, Vitest, pnpm scripts, Git, GitHub CLI.
+**Tech Stack:** Node.js ESM, Vitest, pnpm scripts, Git, GitHub Actions.
 
 ---
 
@@ -26,7 +26,8 @@ Add tests for:
 - `bumpVersion("0.1.0", "major")` returns `1.0.0`.
 - `parseReleaseArgs([])` defaults to `patch`.
 - `applyVersionToProjectFiles(...)` updates package JSON, Tauri config JSON, and Cargo package version.
-- `runRelease(...)` runs `git add`, `git commit`, `git push`, and `gh workflow run Release` with the new version and current branch.
+- `runRelease(...)` runs `git add`, `git commit`, `git push`, `git tag`, and tag push with the new version and current branch.
+- `runRelease(...)` supports `current` mode without bumping or committing.
 
 - [x] **Step 2: Run tests to verify failure**
 
@@ -43,7 +44,7 @@ Implement exported helpers:
 - `applyVersionToProjectFiles(files, nextVersion)`
 - `runRelease(options)`
 
-The CLI should reject dirty worktrees, update three version files, validate the new version, commit with `发布版本 v<version>`, push `origin <branch>`, and trigger `gh workflow run Release -f version=<version> --ref <branch>`.
+The CLI should reject dirty worktrees, update three version files, validate the new version, commit with `发布版本 v<version>`, push `origin <branch>`, create `v<version>`, and push `refs/tags/v<version>`.
 
 - [x] **Step 4: Run targeted tests**
 
@@ -58,7 +59,7 @@ Expected: PASS.
 
 - [x] **Step 1: Document command**
 
-Add usage examples for `pnpm release`, `pnpm release -- minor`, and `pnpm release -- major`.
+Add usage examples for `pnpm release`, `pnpm release -- minor`, `pnpm release -- major`, and `pnpm release -- current`.
 
 - [x] **Step 2: Run verification**
 
@@ -67,7 +68,7 @@ Run:
 ```bash
 pnpm test scripts/release.test.mjs
 pnpm test
-pnpm release:check -- 0.1.0
+pnpm release:check -- 0.1.1
 pnpm build
 git diff --check
 ```

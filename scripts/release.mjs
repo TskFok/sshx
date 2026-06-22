@@ -19,6 +19,18 @@ const VERSION_FILES = [
 
 export function parseReleaseArgs(argv) {
   const positional = argv.filter((arg) => arg !== "--");
+
+  if (positional[0] === "current") {
+    if (positional.length > 1) {
+      throw new Error("Release current mode does not accept a bump type");
+    }
+
+    return {
+      bumpType: "patch",
+      useCurrentVersion: true,
+    };
+  }
+
   const bumpType = positional[0] ?? "patch";
 
   if (!BUMP_TYPES.includes(bumpType)) {
@@ -29,7 +41,10 @@ export function parseReleaseArgs(argv) {
     throw new Error("Release command accepts at most one bump type");
   }
 
-  return { bumpType };
+  return {
+    bumpType,
+    useCurrentVersion: false,
+  };
 }
 
 export function bumpVersion(version, bumpType) {
@@ -123,7 +138,7 @@ export async function runRelease({
     writeFileSync(path.join(cwd, filePath), content, "utf8"),
   runCommand = (command, args) => defaultRunCommand(command, args, cwd),
 } = {}) {
-  const { bumpType } = parseReleaseArgs(argv);
+  const { bumpType, useCurrentVersion } = parseReleaseArgs(argv);
   const status = await runCommand("git", ["status", "--porcelain"]);
 
   if (status.trim()) {
@@ -148,29 +163,39 @@ export async function runRelease({
 
   assertProjectVersionsMatch(currentVersion, currentVersions);
 
-  const version = bumpVersion(currentVersion, bumpType);
+  const version = useCurrentVersion
+    ? currentVersion
+    : bumpVersion(currentVersion, bumpType);
   const { tag } = parseReleaseVersion(version);
-  const nextFiles = applyVersionToProjectFiles(currentFiles, version);
-  const nextVersions = getProjectVersionsFromFiles(nextFiles);
 
-  assertProjectVersionsMatch(version, nextVersions);
-
-  writeFile("package.json", nextFiles.packageJson);
-  writeFile("src-tauri/tauri.conf.json", nextFiles.tauriConfig);
-  writeFile("src-tauri/Cargo.toml", nextFiles.cargoToml);
-
-  await runCommand("git", ["add", ...VERSION_FILES]);
-  await runCommand("git", ["commit", "-m", `发布版本 ${tag}`]);
-  await runCommand("git", ["push", "origin", branch]);
-  await runCommand("gh", [
-    "workflow",
-    "run",
-    "Release",
-    "-f",
-    `version=${version}`,
-    "--ref",
-    branch,
+  const existingRemoteTag = await runCommand("git", [
+    "ls-remote",
+    "--tags",
+    "origin",
+    `refs/tags/${tag}`,
   ]);
+
+  if (existingRemoteTag.trim()) {
+    throw new Error(`Remote tag ${tag} already exists.`);
+  }
+
+  if (!useCurrentVersion) {
+    const nextFiles = applyVersionToProjectFiles(currentFiles, version);
+    const nextVersions = getProjectVersionsFromFiles(nextFiles);
+
+    assertProjectVersionsMatch(version, nextVersions);
+
+    writeFile("package.json", nextFiles.packageJson);
+    writeFile("src-tauri/tauri.conf.json", nextFiles.tauriConfig);
+    writeFile("src-tauri/Cargo.toml", nextFiles.cargoToml);
+
+    await runCommand("git", ["add", ...VERSION_FILES]);
+    await runCommand("git", ["commit", "-m", `发布版本 ${tag}`]);
+  }
+
+  await runCommand("git", ["push", "origin", branch]);
+  await runCommand("git", ["tag", "-a", tag, "-m", `发布 SSHX ${tag}`]);
+  await runCommand("git", ["push", "origin", `refs/tags/${tag}`]);
 
   return {
     version,

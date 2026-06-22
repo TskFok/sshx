@@ -7,9 +7,12 @@ on:
         description: "Release version without v prefix, for example 0.1.0"
         required: true
         type: string
+  push:
+    tags:
+      - "v*"
 
 concurrency:
-  group: release-${{ inputs.version }}
+  group: release-${{ github.event.inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -32,11 +35,20 @@ jobs:
         with:
           node-version: 22
 
-      - name: Validate requested version
+      - name: Resolve release version
         id: validate
-        run: node scripts/validate-release-version.mjs "${{ inputs.version }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node scripts/validate-release-version.mjs "${version}"
 
       - name: Ensure tag does not exist
+        if: github.event_name == 'workflow_dispatch'
         env:
           TAG_NAME: ${{ steps.validate.outputs.tag }}
         run: |
@@ -147,9 +159,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
-            echo "::error::Tag ${TAG_NAME} already exists."
-            exit 1
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+              echo "::error::Tag ${TAG_NAME} already exists."
+              exit 1
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG_NAME}" -m "发布 SSHX ${TAG_NAME}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${TAG_NAME}"
           fi
 
           mapfile -t assets < <(find release-assets -type f | sort)
@@ -157,11 +176,6 @@ jobs:
             echo "::error::No release assets were downloaded."
             exit 1
           fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG_NAME}" -m "发布 SSHX ${TAG_NAME}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${TAG_NAME}"
 
           gh release create "${TAG_NAME}" "${assets[@]}" \
             --title "SSHX ${TAG_NAME}" \

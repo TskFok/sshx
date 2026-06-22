@@ -90,9 +90,12 @@ pnpm release -- minor
 
 # 递增 major，例如 0.1.0 -> 1.0.0
 pnpm release -- major
+
+# 不递增版本，只为当前版本推送 tag 并触发发布
+pnpm release -- current
 ```
 
-发布命令要求运行前工作区是干净的，并且本机已安装、登录 GitHub CLI（`gh`）。命令会同步更新以下版本号文件：
+发布命令要求运行前工作区是干净的，并且当前分支可推送到 `origin`。命令会同步更新以下版本号文件：
 
 - `package.json`
 - `src-tauri/tauri.conf.json`
@@ -101,10 +104,12 @@ pnpm release -- major
 如需只校验当前版本一致性，可运行：
 
 ```bash
-pnpm release:check -- 0.1.0
+pnpm release:check -- <version>
 ```
 
-发布 workflow 会在 macOS、Windows、Linux 上构建安装包，构建全部成功后自动创建 `v<version>` tag，并将产物发布到 [GitHub Releases](https://github.com/TskFok/sshx/releases)。
+发布命令通过推送 `v<version>` tag 自动触发 workflow，不依赖本机安装 GitHub CLI。如果版本提交已经推送但 tag 触发失败，可在修复后运行 `pnpm release -- current` 为当前版本重新触发发布。
+
+发布 workflow 会在 macOS、Windows、Linux 上构建安装包，并将产物发布到 [GitHub Releases](https://github.com/TskFok/sshx/releases)。也可以在 GitHub Actions 页面手动运行 `Release` workflow，输入不带 `v` 前缀的版本号，由 workflow 创建 tag 并发布。
 
 ## 开发检查
 
