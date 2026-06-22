@@ -81,6 +81,12 @@ import {
   getConnectionFileTransferPath,
   getTerminalNavigationState,
 } from "@/lib/connectionNavigation";
+import {
+  getConnectionTransferDialogCopy,
+  validateExportPassword,
+  validateImportPassword,
+  type ConnectionTransferDialogMode,
+} from "@/lib/connectionTransfer";
 
 interface ConnectionFormData {
   name: string;
@@ -147,6 +153,16 @@ export function Connections() {
   );
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [transferDialogMode, setTransferDialogMode] =
+    useState<ConnectionTransferDialogMode | null>(null);
+  const [transferPassword, setTransferPassword] = useState("");
+  const [transferConfirmPassword, setTransferConfirmPassword] = useState("");
+  const [transferPasswordError, setTransferPasswordError] = useState<
+    string | null
+  >(null);
+  const [importPendingPath, setImportPendingPath] = useState<string | null>(
+    null
+  );
   const [transferMessage, setTransferMessage] = useState<{
     ok: boolean;
     text: string;
@@ -279,34 +295,20 @@ export function Connections() {
     navigate(getConnectionFileTransferPath(conn.id));
   };
 
-  const handleExportConnections = async () => {
-    setTransferMessage(null);
-    const path = await save({
-      defaultPath: `sshx-connections-${new Date().toISOString().slice(0, 10)}.json`,
-      filters: [{ name: "SSHX 连接备份", extensions: ["json"] }],
-    });
-    if (!path) {
-      return;
-    }
+  const resetTransferDialog = () => {
+    setTransferDialogMode(null);
+    setTransferPassword("");
+    setTransferConfirmPassword("");
+    setTransferPasswordError(null);
+    setImportPendingPath(null);
+  };
 
-    setExporting(true);
-    try {
-      const result = await invoke<ExportConnectionsResult>(
-        "export_connections_file",
-        { path }
-      );
-      setTransferMessage({
-        ok: true,
-        text: `已导出 ${result.exportedConnections} 个连接、${result.exportedGroups} 个分组`,
-      });
-    } catch (err) {
-      setTransferMessage({
-        ok: false,
-        text: typeof err === "string" ? err : String(err),
-      });
-    } finally {
-      setExporting(false);
-    }
+  const handleExportConnections = () => {
+    setTransferMessage(null);
+    setTransferPassword("");
+    setTransferConfirmPassword("");
+    setTransferPasswordError(null);
+    setTransferDialogMode("export");
   };
 
   const handleImportConnections = async () => {
@@ -319,16 +321,75 @@ export function Connections() {
       return;
     }
 
+    setTransferPassword("");
+    setTransferConfirmPassword("");
+    setTransferPasswordError(null);
+    setImportPendingPath(path);
+    setTransferDialogMode("import");
+  };
+
+  const handleConfirmTransfer = async () => {
+    if (!transferDialogMode) {
+      return;
+    }
+
+    const validationError =
+      transferDialogMode === "export"
+        ? validateExportPassword(transferPassword, transferConfirmPassword)
+        : validateImportPassword(transferPassword);
+    if (validationError) {
+      setTransferPasswordError(validationError);
+      return;
+    }
+
+    setTransferPasswordError(null);
+
+    if (transferDialogMode === "export") {
+      const path = await save({
+        defaultPath: `sshx-connections-${new Date().toISOString().slice(0, 10)}.json`,
+        filters: [{ name: "SSHX 连接备份", extensions: ["json"] }],
+      });
+      if (!path) {
+        return;
+      }
+
+      setExporting(true);
+      try {
+        const result = await invoke<ExportConnectionsResult>(
+          "export_connections_file",
+          { path, password: transferPassword }
+        );
+        setTransferMessage({
+          ok: true,
+          text: `已导出 ${result.exportedConnections} 个连接、${result.exportedGroups} 个分组（已加密）`,
+        });
+        resetTransferDialog();
+      } catch (err) {
+        setTransferMessage({
+          ok: false,
+          text: typeof err === "string" ? err : String(err),
+        });
+      } finally {
+        setExporting(false);
+      }
+      return;
+    }
+
+    if (!importPendingPath) {
+      return;
+    }
+
     setImporting(true);
     try {
       const result = await invoke<ImportConnectionsResult>(
         "import_connections_file",
-        { path }
+        { path: importPendingPath, password: transferPassword }
       );
       setTransferMessage({
         ok: true,
         text: `已导入 ${result.importedConnections} 个连接、${result.importedGroups} 个分组；跳过 ${result.skippedConnections} 个连接、${result.skippedGroups} 个分组`,
       });
+      resetTransferDialog();
       await loadData();
     } catch (err) {
       setTransferMessage({
@@ -621,6 +682,9 @@ export function Connections() {
     collapsedGroupIds
   );
   const sortingDisabled = isConnectionSortingDisabled(search);
+  const transferDialogCopy = transferDialogMode
+    ? getConnectionTransferDialogCopy(transferDialogMode)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -1333,6 +1397,77 @@ export function Connections() {
             </Button>
             <Button onClick={handleSaveGroup} disabled={!groupForm.name}>
               创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={transferDialogMode !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            resetTransferDialog();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>{transferDialogCopy?.title}</DialogTitle>
+            <DialogDescription>{transferDialogCopy?.description}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="transfer-password">备份密码</Label>
+              <Input
+                id="transfer-password"
+                type="password"
+                autoComplete="new-password"
+                placeholder="请输入备份密码"
+                value={transferPassword}
+                onChange={(e) => {
+                  setTransferPassword(e.target.value);
+                  setTransferPasswordError(null);
+                }}
+              />
+            </div>
+            {transferDialogCopy?.showConfirmPassword && (
+              <div className="space-y-2">
+                <Label htmlFor="transfer-confirm-password">确认密码</Label>
+                <Input
+                  id="transfer-confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="再次输入备份密码"
+                  value={transferConfirmPassword}
+                  onChange={(e) => {
+                    setTransferConfirmPassword(e.target.value);
+                    setTransferPasswordError(null);
+                  }}
+                />
+              </div>
+            )}
+            {transferPasswordError && (
+              <p className="text-sm text-destructive">{transferPasswordError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={resetTransferDialog}>
+              取消
+            </Button>
+            <Button
+              onClick={handleConfirmTransfer}
+              disabled={
+                exporting ||
+                importing ||
+                !transferPassword ||
+                (transferDialogCopy?.showConfirmPassword &&
+                  !transferConfirmPassword)
+              }
+            >
+              {exporting || importing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              {transferDialogCopy?.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>

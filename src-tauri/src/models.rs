@@ -139,6 +139,7 @@ pub struct ReorderConnectionsRequest {
     pub connection_ids: Vec<String>,
 }
 
+/// 连接备份明文载荷（仅存在于加密后的密文内）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionExportFile {
@@ -147,6 +148,18 @@ pub struct ConnectionExportFile {
     pub groups: Vec<ConnectionGroup>,
     pub connections: Vec<ConnectionInfo>,
 }
+
+/// 写入磁盘的加密连接备份（version 2）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionEncryptedExportFile {
+    pub version: u32,
+    pub exported_at: i64,
+    pub ciphertext: String,
+}
+
+pub const CONNECTION_EXPORT_FILE_VERSION: u32 = 1;
+pub const CONNECTION_ENCRYPTED_EXPORT_FILE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

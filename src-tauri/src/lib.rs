@@ -1,5 +1,4 @@
 mod commands;
-#[cfg(test)]
 mod crypto;
 mod db;
 mod diagnostic;

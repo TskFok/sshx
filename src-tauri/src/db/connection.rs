@@ -1,7 +1,7 @@
 use crate::db::group;
 use crate::models::{
     AuthType, ConnectionExportFile, ConnectionInfo, CreateConnectionRequest,
-    ImportConnectionsResult, UpdateConnectionRequest,
+    ImportConnectionsResult, UpdateConnectionRequest, CONNECTION_EXPORT_FILE_VERSION,
 };
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
@@ -275,7 +275,7 @@ fn connection_duplicate_key(
 
 pub fn export_all(conn: &Connection) -> Result<ConnectionExportFile, rusqlite::Error> {
     Ok(ConnectionExportFile {
-        version: 1,
+        version: CONNECTION_EXPORT_FILE_VERSION,
         exported_at: now_timestamp(),
         groups: group::list_all(conn)?,
         connections: list_all(conn)?,
@@ -498,7 +498,7 @@ mod tests {
 
         let export = export_all(&conn).unwrap();
 
-        assert_eq!(export.version, 1);
+        assert_eq!(export.version, CONNECTION_EXPORT_FILE_VERSION);
         assert_eq!(export.groups.len(), 1);
         assert_eq!(export.groups[0].name, "prod");
         assert_eq!(export.connections.len(), 1);
@@ -531,7 +531,7 @@ mod tests {
         .unwrap();
 
         let imported = ConnectionExportFile {
-            version: 1,
+            version: CONNECTION_EXPORT_FILE_VERSION,
             exported_at: 123,
             groups: vec![
                 crate::models::ConnectionGroup {
