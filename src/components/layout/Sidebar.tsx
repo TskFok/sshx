@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Server,
+  FolderOpen,
   Terminal,
   Settings,
   ScrollText,
@@ -27,6 +28,11 @@ const navItems = [
     label: "连接管理",
     icon: Server,
     path: "/connections",
+  },
+  {
+    label: "文件传输",
+    icon: FolderOpen,
+    path: "/file-transfer",
   },
   {
     label: "终端",

@@ -24,7 +24,7 @@ export function Header() {
   const location = useLocation();
   const sessions = useAppStore((s) => s.sessions);
 
-  const title = location.pathname.startsWith("/file-transfer/")
+  const title = location.pathname.startsWith("/file-transfer")
     ? "文件传输"
     : pageTitles[location.pathname] || "SSHX";
 

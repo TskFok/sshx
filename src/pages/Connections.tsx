@@ -79,6 +79,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   getConnectionFileTransferPath,
+  getConnectionPrimaryNavigationState,
   getTerminalNavigationState,
 } from "@/lib/connectionNavigation";
 import {
@@ -288,6 +289,11 @@ export function Connections() {
 
   const handleOpenTerminal = (conn: ConnectionInfo) => {
     const target = getTerminalNavigationState(conn.id);
+    navigate(target.pathname, { state: target.state });
+  };
+
+  const handleOpenConnection = (conn: ConnectionInfo) => {
+    const target = getConnectionPrimaryNavigationState(conn.id);
     navigate(target.pathname, { state: target.state });
   };
 
@@ -891,7 +897,7 @@ export function Connections() {
                           : "hover:shadow-md",
                         dragOverConnectionId === conn.id && "ring-2 ring-ring"
                       )}
-                      onClick={() => handleOpenFileTransfer(conn)}
+                      onClick={() => handleOpenConnection(conn)}
                     >
                       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
                         <div className="flex min-w-0 items-center gap-3">

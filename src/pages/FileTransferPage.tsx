@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { confirm as confirmDialog, open } from "@tauri-apps/plugin-dialog";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Download,
@@ -24,6 +24,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore, type ConnectionGroup, type ConnectionInfo } from "@/store";
+import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
+import { getConnectionFileTransferPath } from "@/lib/connectionNavigation";
 import {
   filterFileEntriesBySearch,
   formatTransferBytes,
@@ -140,6 +142,7 @@ export function FileTransferPage() {
   const historyLayoutClasses = getFileTransferHistoryLayoutClasses();
   const connections = useAppStore((s) => s.connections);
   const setConnections = useAppStore((s) => s.setConnections);
+  const groups = useAppStore((s) => s.groups);
   const setGroups = useAppStore((s) => s.setGroups);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -166,6 +169,7 @@ export function FileTransferPage() {
   const [progressMap, setProgressMap] = useState<TransferProgressMap>({});
   const [authPrompt, setAuthPrompt] = useState<AuthPromptData | null>(null);
   const [authResponses, setAuthResponses] = useState<string[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
 
   const connection = useMemo(
     () => connections.find((item) => item.id === connectionId),
@@ -206,6 +210,7 @@ export function FileTransferPage() {
   }, [remoteSnapshot?.cwd]);
 
   const loadConnections = useCallback(async () => {
+    setConnectionsLoading(true);
     try {
       const [conns, groups] = await Promise.all([
         invoke<ConnectionInfo[]>("list_connections"),
@@ -215,6 +220,8 @@ export function FileTransferPage() {
       setGroups(groups);
     } catch {
       // Tauri 外运行时保持当前状态。
+    } finally {
+      setConnectionsLoading(false);
     }
   }, [setConnections, setGroups]);
 
@@ -317,9 +324,13 @@ export function FileTransferPage() {
 
   useEffect(() => {
     void loadConnections();
+    if (!connectionId) {
+      setConnectionError(null);
+      return;
+    }
     void loadLocalDir(null);
     void loadHistory();
-  }, [loadConnections, loadLocalDir, loadHistory]);
+  }, [connectionId, loadConnections, loadLocalDir, loadHistory]);
 
   useEffect(() => {
     if (connectionId && connections.length > 0 && !connection) {
@@ -605,6 +616,16 @@ export function FileTransferPage() {
     }
   };
 
+  if (!connectionId) {
+    return (
+      <FileTransferConnectionPicker
+        connections={connections}
+        groups={groups}
+        loading={connectionsLoading}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       {connectionError && (
@@ -777,6 +798,118 @@ export function FileTransferPage() {
         onSubmit={handleAuthSubmit}
         onCancel={handleAuthCancel}
       />
+    </div>
+  );
+}
+
+export function FileTransferConnectionPicker({
+  connections,
+  groups,
+  loading,
+}: {
+  connections: ConnectionInfo[];
+  groups: ConnectionGroup[];
+  loading: boolean;
+}) {
+  const sections = groupConnectionsForDisplay(connections, groups);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-2">
+        <h2 className="text-2xl font-bold tracking-tight">
+          选择连接进行文件传输
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          从已保存的 SSH 连接中选择一个，开始上传或下载文件。
+        </p>
+      </div>
+
+      {loading && connections.length === 0 ? (
+        <Card>
+          <CardContent className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            正在加载连接
+          </CardContent>
+        </Card>
+      ) : connections.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <Server className="mb-4 h-14 w-14 text-muted-foreground/30" />
+            <h3 className="text-lg font-medium">还没有连接</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              先添加 SSH 连接，再进行文件传输。
+            </p>
+            <Button asChild className="mt-4">
+              <Link to="/connections">前往连接管理</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-6">
+          {sections.map((section) => (
+            <section key={section.id} className="space-y-3">
+              <div className="flex items-center gap-2 rounded-md px-1 py-1.5">
+                {section.color ? (
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: section.color }}
+                  />
+                ) : (
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-muted-foreground/40" />
+                )}
+                <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">
+                  {section.title}
+                </h3>
+                <Badge variant="secondary" className="shrink-0 text-xs">
+                  {section.connections.length}
+                </Badge>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {section.connections.map((conn) => (
+                  <Link
+                    key={conn.id}
+                    to={getConnectionFileTransferPath(conn.id)}
+                    className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    aria-label={`选择 ${conn.name} 进行文件传输`}
+                  >
+                    <Card
+                      className={cn(
+                        "h-full transition-shadow hover:shadow-md",
+                        conn.isImportant &&
+                          "border-2 border-amber-500 shadow-[0_0_0_3px_rgba(245,158,11,0.12)]"
+                      )}
+                    >
+                      <CardHeader className="flex flex-row items-start gap-3 space-y-0">
+                        <div
+                          className={cn(
+                            "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+                            conn.isImportant ? "bg-amber-100" : "bg-primary/10"
+                          )}
+                        >
+                          <FolderOpen
+                            className={cn(
+                              "h-5 w-5",
+                              conn.isImportant ? "text-amber-700" : "text-primary"
+                            )}
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <CardTitle className="truncate text-base">
+                            {conn.name}
+                          </CardTitle>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {conn.username}@{conn.host}:{conn.port}
+                          </p>
+                        </div>
+                      </CardHeader>
+                    </Card>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

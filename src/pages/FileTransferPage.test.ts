@@ -18,7 +18,12 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-import { FilePanel, FileTransferPage, HistoryRow } from "./FileTransferPage";
+import {
+  FilePanel,
+  FileTransferConnectionPicker,
+  FileTransferPage,
+  HistoryRow,
+} from "./FileTransferPage";
 
 const connection: ConnectionInfo = {
   id: "conn-1",
@@ -39,6 +44,14 @@ const connection: ConnectionInfo = {
   sortOrder: 0,
 };
 
+const ungroupedConnection: ConnectionInfo = {
+  ...connection,
+  id: "conn-2",
+  name: "未分组服务器",
+  host: "ungrouped.example.com",
+  groupId: null,
+};
+
 function renderFileTransferPage() {
   return renderToStaticMarkup(
     React.createElement(
@@ -52,6 +65,26 @@ function renderFileTransferPage() {
           element: React.createElement(FileTransferPage),
         })
       )
+    )
+  );
+}
+
+function renderFileTransferConnectionPicker() {
+  return renderToStaticMarkup(
+    React.createElement(
+      MemoryRouter,
+      null,
+      React.createElement(FileTransferConnectionPicker, {
+        connections: [
+          { ...connection, groupId: "prod" },
+          ungroupedConnection,
+        ],
+        groups: [
+          { id: "prod", name: "生产", color: "#ef4444", sortOrder: 0 },
+          { id: "empty", name: "空分组", color: "#22c55e", sortOrder: 1 },
+        ],
+        loading: false,
+      })
     )
   );
 }
@@ -80,6 +113,22 @@ describe("FileTransferPage", () => {
     expect(html).toContain("本地文件");
     expect(html).toContain("远程文件");
     expect(html).toContain("加载中");
+  });
+
+  it("renders a connection picker when no connection is selected", () => {
+    const html = renderFileTransferConnectionPicker();
+
+    expect(html).toContain("选择连接进行文件传输");
+    expect(html.indexOf("生产")).toBeLessThan(html.indexOf("生产服务器"));
+    expect(html).toContain("生产服务器");
+    expect(html).toContain("alice@example.com:22");
+    expect(html).toContain('href="/file-transfer/conn-1"');
+    expect(html.indexOf("未分组")).toBeLessThan(html.indexOf("未分组服务器"));
+    expect(html).toContain("未分组服务器");
+    expect(html).toContain('href="/file-transfer/conn-2"');
+    expect(html).not.toContain("空分组");
+    expect(html).not.toContain("本地文件");
+    expect(html).not.toContain("远程文件");
   });
 
   it("renders permissions in the remote file panel", () => {

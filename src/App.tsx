@@ -20,6 +20,7 @@ function App() {
       <Route element={<MainLayout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/connections" element={<Connections />} />
+        <Route path="/file-transfer" element={<FileTransferPage />} />
         <Route path="/file-transfer/:connectionId" element={<FileTransferPage />} />
         <Route path="/terminal" element={<></>} />
         <Route path="/settings" element={<Settings />} />
