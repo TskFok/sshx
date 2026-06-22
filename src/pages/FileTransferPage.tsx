@@ -39,7 +39,10 @@ import {
   type TransferProgressMap,
   type TransferProgressPayload,
 } from "@/lib/fileTransfer";
-import { shouldAcceptConnectionResult } from "@/lib/fileTransferConnection";
+import {
+  shouldAcceptConnectionResult,
+  shouldStartConnection,
+} from "@/lib/fileTransferConnection";
 import {
   getFilePanelLayoutClasses,
   getFileTransferHistoryLayoutClasses,
@@ -147,7 +150,9 @@ export function FileTransferPage() {
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  const connectingRef = useRef(false);
+  const sessionConnectionIdRef = useRef<string | null>(null);
+  const pendingConnectionIdRef = useRef<string | null>(null);
+  const connectionAttemptRef = useRef(0);
   const pageDisposedRef = useRef(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [localSnapshot, setLocalSnapshot] = useState<LocalDirSnapshot | null>(null);
@@ -246,9 +251,8 @@ export function FileTransferPage() {
     []
   );
 
-  const loadRemoteDir = useCallback(
-    async (path: string, options?: { keepSearch?: boolean }) => {
-      if (!sessionIdRef.current) return;
+  const loadRemoteDirForSession = useCallback(
+    async (targetSessionId: string, path: string, options?: { keepSearch?: boolean }) => {
       setRemoteLoading(true);
       if (!options?.keepSearch) {
         setRemoteSearch("");
@@ -257,18 +261,34 @@ export function FileTransferPage() {
         const snapshot = await invoke<RemoteDirSnapshot>(
           "file_transfer_list_remote_dir",
           {
-            request: { sessionId: sessionIdRef.current, path },
+            request: { sessionId: targetSessionId, path },
           }
         );
+        if (sessionIdRef.current !== targetSessionId) {
+          return;
+        }
         setRemoteSnapshot(snapshot);
         setSelectedRemotePaths([]);
       } catch (error) {
-        setConnectionError(typeof error === "string" ? error : String(error));
+        if (sessionIdRef.current === targetSessionId) {
+          setConnectionError(typeof error === "string" ? error : String(error));
+        }
       } finally {
-        setRemoteLoading(false);
+        if (sessionIdRef.current === targetSessionId) {
+          setRemoteLoading(false);
+        }
       }
     },
     []
+  );
+
+  const loadRemoteDir = useCallback(
+    async (path: string, options?: { keepSearch?: boolean }) => {
+      const currentSessionId = sessionIdRef.current;
+      if (!currentSessionId) return;
+      await loadRemoteDirForSession(currentSessionId, path, options);
+    },
+    [loadRemoteDirForSession]
   );
 
   const loadHistory = useCallback(async () => {
@@ -385,30 +405,80 @@ export function FileTransferPage() {
     pageDisposedRef.current = false;
     return () => {
       pageDisposedRef.current = true;
+      connectionAttemptRef.current += 1;
+      pendingConnectionIdRef.current = null;
       const id = sessionIdRef.current;
       if (id) {
         invoke("ssh_disconnect", { sessionId: id }).catch(() => {});
         sessionIdRef.current = null;
+        sessionConnectionIdRef.current = null;
       }
     };
   }, []);
 
   useEffect(() => {
-    if (!connectionId || !connection || connectingRef.current || sessionIdRef.current) {
+    const requestedConnectionId = connectionId ?? null;
+    if (
+      !shouldStartConnection({
+        requestedConnectionId,
+        hasConnection: Boolean(connection),
+        activeConnectionId: sessionConnectionIdRef.current,
+        pendingConnectionId: pendingConnectionIdRef.current,
+      })
+    ) {
       return;
     }
 
+    const targetConnectionId = requestedConnectionId;
+    if (!targetConnectionId) {
+      return;
+    }
+
+    connectionAttemptRef.current += 1;
+    const attemptId = connectionAttemptRef.current;
     let unlistenPrompt: UnlistenFn | null = null;
-    connectingRef.current = true;
+    const activeSessionId = sessionIdRef.current;
+    const activeTransfer = activeTransferRef.current;
+    pendingConnectionIdRef.current = targetConnectionId;
+
+    if (activeTransfer) {
+      invoke("file_transfer_cancel", {
+        request: { transferId: activeTransfer.id },
+      }).catch(() => {});
+      activeTransferRef.current = null;
+      setActiveTransfer(null);
+      setTransferBusy(false);
+      setCancelingTransferId(null);
+    }
+    if (activeSessionId) {
+      invoke("ssh_disconnect", { sessionId: activeSessionId }).catch(() => {});
+      sessionIdRef.current = null;
+      sessionConnectionIdRef.current = null;
+      setSessionId(null);
+    }
+
+    setRemoteSnapshot(null);
+    setSelectedRemotePaths([]);
+    setRemoteSearch("");
+    setAuthPrompt(null);
+    setAuthResponses([]);
     setConnectionError(null);
+
+    const isCurrentAttempt = () =>
+      !pageDisposedRef.current &&
+      connectionAttemptRef.current === attemptId &&
+      pendingConnectionIdRef.current === targetConnectionId;
 
     const connect = async () => {
       const nextSessionId = generateId();
       try {
         unlistenPrompt = await setupAuthPromptListener(nextSessionId);
+        if (!isCurrentAttempt()) {
+          return;
+        }
         const returned = await invoke<string>("ssh_connect", {
           request: {
-            connectionId,
+            connectionId: targetConnectionId,
             sessionId: nextSessionId,
             cols: 80,
             rows: 24,
@@ -418,27 +488,76 @@ export function FileTransferPage() {
           !shouldAcceptConnectionResult({
             pageDisposed: pageDisposedRef.current,
             returnedSessionId: returned,
+            attemptId,
+            currentAttemptId: connectionAttemptRef.current,
           })
         ) {
           await invoke("ssh_disconnect", { sessionId: returned });
           return;
         }
         sessionIdRef.current = returned;
+        sessionConnectionIdRef.current = targetConnectionId;
         setSessionId(returned);
         const cwd = await invoke<string>("sftp_get_remote_pwd", {
           request: { sessionId: returned },
         });
-        await loadRemoteDir(cwd);
+        if (
+          !shouldAcceptConnectionResult({
+            pageDisposed: pageDisposedRef.current,
+            returnedSessionId: returned,
+            attemptId,
+            currentAttemptId: connectionAttemptRef.current,
+          }) ||
+          sessionIdRef.current !== returned
+        ) {
+          await invoke("ssh_disconnect", { sessionId: returned });
+          return;
+        }
+        pendingConnectionIdRef.current = null;
+        await loadRemoteDirForSession(returned, cwd);
       } catch (error) {
-        setConnectionError(typeof error === "string" ? error : String(error));
+        if (isCurrentAttempt()) {
+          setConnectionError(typeof error === "string" ? error : String(error));
+        }
       } finally {
-        connectingRef.current = false;
+        if (isCurrentAttempt()) {
+          pendingConnectionIdRef.current = null;
+        }
         unlistenPrompt?.();
       }
     };
 
     void connect();
-  }, [connectionId, connection, setupAuthPromptListener, loadRemoteDir]);
+    return () => {
+      connectionAttemptRef.current += 1;
+      if (pendingConnectionIdRef.current === targetConnectionId) {
+        pendingConnectionIdRef.current = null;
+      }
+      unlistenPrompt?.();
+
+      const cleanupTransfer = activeTransferRef.current;
+      if (cleanupTransfer) {
+        invoke("file_transfer_cancel", {
+          request: { transferId: cleanupTransfer.id },
+        }).catch(() => {});
+        activeTransferRef.current = null;
+        setActiveTransfer(null);
+        setTransferBusy(false);
+        setCancelingTransferId(null);
+      }
+
+      const cleanupSessionId = sessionIdRef.current;
+      if (
+        cleanupSessionId &&
+        sessionConnectionIdRef.current === targetConnectionId
+      ) {
+        invoke("ssh_disconnect", { sessionId: cleanupSessionId }).catch(() => {});
+        sessionIdRef.current = null;
+        sessionConnectionIdRef.current = null;
+        setSessionId(null);
+      }
+    };
+  }, [connectionId, connection?.id, setupAuthPromptListener, loadRemoteDirForSession]);
 
   const uploadSelected = async () => {
     if (selectedLocalFiles.length === 0 || !remoteSnapshot || !sessionId || !connectionId) {

@@ -104,8 +104,7 @@ impl SshSession {
             .map_err(|_| "session closed".to_string())
     }
 
-    pub async fn close(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        drop(self.cmd_tx);
+    pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
             .await?;

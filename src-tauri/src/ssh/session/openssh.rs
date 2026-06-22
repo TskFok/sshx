@@ -48,13 +48,26 @@ impl SshSession {
             .map_err(|_| "session closed".to_string())
     }
 
-    pub async fn close(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        drop(self.cmd_tx);
+    pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(mut ch) = self.child.lock().ok().and_then(|mut g| g.take()) {
             let _ = ch.kill();
         }
         let _ = std::fs::remove_file(&self.control_path);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn new_test(id: &str) -> Self {
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
+        Self {
+            id: id.to_string(),
+            cmd_tx,
+            child: Arc::new(Mutex::new(None)),
+            control_path: format!("/tmp/sshx-test-control-{id}"),
+            sftp_prefix_args: Vec::new(),
+            ssh_mux_prefix_args: Vec::new(),
+            sftp_destination: "test@example.com".to_string(),
+        }
     }
 
     /// 通过系统 `sftp`（ControlMaster 复用连接）上传。

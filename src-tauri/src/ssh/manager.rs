@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct SessionManager {
-    sessions: Arc<Mutex<HashMap<String, SshSession>>>,
+    sessions: Arc<Mutex<HashMap<String, Arc<SshSession>>>>,
 }
 
 impl SessionManager {
@@ -17,20 +17,28 @@ impl SessionManager {
 
     pub async fn add_session(&self, session: SshSession) {
         let mut sessions = self.sessions.lock().await;
-        sessions.insert(session.id.clone(), session);
+        sessions.insert(session.id.clone(), Arc::new(session));
     }
 
     pub async fn get_session<F, R>(&self, id: &str, f: F) -> Option<R>
     where
         F: FnOnce(&SshSession) -> R,
     {
-        let sessions = self.sessions.lock().await;
-        sessions.get(id).map(f)
+        let session = self.session_for_operation(id).await.ok()?;
+        Some(f(session.as_ref()))
     }
 
-    pub async fn remove_session(&self, id: &str) -> Option<SshSession> {
+    pub async fn remove_session(&self, id: &str) -> Option<Arc<SshSession>> {
         let mut sessions = self.sessions.lock().await;
         sessions.remove(id)
+    }
+
+    async fn session_for_operation(&self, id: &str) -> Result<Arc<SshSession>, String> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .get(id)
+            .cloned()
+            .ok_or_else(|| "会话不存在或已断开".to_string())
     }
 
     #[allow(dead_code)]
@@ -47,10 +55,7 @@ impl SessionManager {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session
             .sftp_upload(remote_base_dir, remote_name, local_path)
             .await
@@ -64,10 +69,7 @@ impl SessionManager {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session
             .sftp_download(remote_base_dir, remote_name, local_path)
             .await
@@ -75,10 +77,7 @@ impl SessionManager {
 
     #[cfg(not(target_os = "macos"))]
     pub async fn sftp_get_remote_pwd(&self, session_id: &str) -> Result<String, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.get_remote_pwd().await
     }
 
@@ -87,10 +86,7 @@ impl SessionManager {
         &self,
         session_id: &str,
     ) -> Result<crate::models::RemoteDirSnapshot, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.list_remote_cwd().await
     }
 
@@ -102,10 +98,7 @@ impl SessionManager {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session
             .sftp_upload(remote_base_dir, remote_name, local_path)
             .await
@@ -119,10 +112,7 @@ impl SessionManager {
         remote_name: &str,
         local_path: &std::path::Path,
     ) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session
             .sftp_download(remote_base_dir, remote_name, local_path)
             .await
@@ -130,10 +120,7 @@ impl SessionManager {
 
     #[cfg(target_os = "macos")]
     pub async fn sftp_get_remote_pwd(&self, session_id: &str) -> Result<String, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.get_remote_pwd().await
     }
 
@@ -142,10 +129,7 @@ impl SessionManager {
         &self,
         session_id: &str,
     ) -> Result<crate::models::RemoteDirSnapshot, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.list_remote_cwd().await
     }
 
@@ -154,10 +138,7 @@ impl SessionManager {
         session_id: &str,
         path: &str,
     ) -> Result<crate::models::RemoteDirSnapshot, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.list_remote_dir(path).await
     }
 
@@ -166,18 +147,12 @@ impl SessionManager {
         session_id: &str,
         path: &str,
     ) -> Result<bool, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.remote_path_exists(path).await
     }
 
     pub async fn sftp_remote_file_size(&self, session_id: &str, path: &str) -> Result<u64, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session.remote_file_size(path).await
     }
 
@@ -194,10 +169,7 @@ impl SessionManager {
     where
         F: FnMut(u64) + Send + 'static,
     {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session
             .sftp_upload_with_progress(
                 remote_base_dir,
@@ -223,10 +195,7 @@ impl SessionManager {
     where
         F: FnMut(u64) + Send + 'static,
     {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "会话不存在或已断开".to_string())?;
+        let session = self.session_for_operation(session_id).await?;
         session
             .sftp_download_with_progress(
                 remote_base_dir,
@@ -243,11 +212,30 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_session_manager_new() {
         let manager = SessionManager::new();
         let ids = manager.session_ids().await;
         assert!(ids.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn session_handle_does_not_hold_session_table_lock() {
+        let manager = SessionManager::new();
+        manager.add_session(SshSession::new_test("session-1")).await;
+
+        let _session = manager.session_for_operation("session-1").await.unwrap();
+        let add_second = tokio::time::timeout(
+            Duration::from_millis(100),
+            manager.add_session(SshSession::new_test("session-2")),
+        )
+        .await;
+
+        assert!(add_second.is_ok());
+        assert_eq!(manager.session_ids().await.len(), 2);
     }
 }
