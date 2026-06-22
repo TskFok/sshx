@@ -1,6 +1,6 @@
 use russh::cipher;
 use russh::kex;
-use russh::keys::key;
+use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
 use russh::mac;
 use russh::{client, Preferred};
 use std::borrow::Cow;
@@ -39,12 +39,20 @@ pub fn build_client_config(keepalive_interval_secs: u32, keepalive_max: u32) -> 
                 kex::EXTENSION_SUPPORT_AS_CLIENT,
             ]),
             key: Cow::Borrowed(&[
-                key::ED25519,
-                key::ECDSA_SHA2_NISTP256,
-                key::ECDSA_SHA2_NISTP521,
-                key::RSA_SHA2_256,
-                key::RSA_SHA2_512,
-                key::SSH_RSA,
+                Algorithm::Ed25519,
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP256,
+                },
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP521,
+                },
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha256),
+                },
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha512),
+                },
+                Algorithm::Rsa { hash: None },
             ]),
             cipher: Cow::Borrowed(&[
                 cipher::CHACHA20_POLY1305,

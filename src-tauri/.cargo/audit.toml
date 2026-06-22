@@ -1,0 +1,5 @@
+# rsa 库尚无修复版本（RUSTSEC-2023-0071，Marvin Attack 计时侧信道）。
+# 该依赖由 russh 引入，用于 SSH RSA 密钥交换/认证；禁用 rsa feature 会破坏堡垒机兼容。
+# 待 upstream 发布 constant-time 实现后再移除此忽略项。
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

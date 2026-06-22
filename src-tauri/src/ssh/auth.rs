@@ -1,6 +1,10 @@
 use crate::models::AuthType;
 #[cfg(not(target_os = "macos"))]
-use russh_keys::key::{KeyPair, SignatureHash};
+use russh::keys::key::PrivateKeyWithHashAlg;
+#[cfg(not(target_os = "macos"))]
+use russh::keys::{decode_secret_key, PrivateKey};
+#[cfg(not(target_os = "macos"))]
+use std::sync::Arc;
 use std::path::Path;
 use thiserror::Error;
 
@@ -22,7 +26,7 @@ pub enum AuthMethod {
     #[cfg(target_os = "macos")]
     KeyFile(String),
     #[cfg(not(target_os = "macos"))]
-    PublicKey(KeyPair),
+    PublicKey(PrivateKeyWithHashAlg),
 }
 
 pub fn prepare_auth(
@@ -63,15 +67,15 @@ pub fn prepare_auth(
                     .map_err(|e| AuthError::FileReadError(format!("{}: {}", key_path, e)))?;
 
                 let key_pair = if let Some(phrase) = passphrase {
-                    russh_keys::decode_secret_key(&key_content, Some(phrase))
+                    decode_secret_key(&key_content, Some(phrase))
                         .map_err(|e| AuthError::InvalidKey(e.to_string()))?
                 } else {
-                    russh_keys::decode_secret_key(&key_content, None)
+                    decode_secret_key(&key_content, None)
                         .map_err(|e| AuthError::InvalidKey(e.to_string()))?
                 };
-                // OpenSSH 格式 RSA 在 russh-keys 中默认用 rsa-sha2-512；JumpServer 等仅接受 ssh-rsa（SHA1）
-                // 时需与系统 OpenSSH `PubkeyAcceptedAlgorithms=+ssh-rsa` 行为一致。
-                let key_pair = prefer_ssh_rsa_for_rsa_keypair(key_pair);
+                // OpenSSH 格式 RSA 默认 rsa-sha2-512；JumpServer 等仅接受 ssh-rsa（SHA1）时需与
+                // 系统 OpenSSH `PubkeyAcceptedAlgorithms=+ssh-rsa` 行为一致。
+                let key_pair = prefer_ssh_rsa_for_rsa_key(Arc::new(key_pair));
                 Ok(AuthMethod::PublicKey(key_pair))
             }
         }
@@ -80,10 +84,12 @@ pub fn prepare_auth(
 
 /// RSA 公钥认证时改用 `ssh-rsa`（SHA1）签名，以兼容仅启用旧版 RSA 签名的堡垒机/ssh 服务。
 #[cfg(not(target_os = "macos"))]
-fn prefer_ssh_rsa_for_rsa_keypair(key_pair: KeyPair) -> KeyPair {
-    match key_pair {
-        kp @ KeyPair::RSA { .. } => kp.with_signature_hash(SignatureHash::SHA1).unwrap_or(kp),
-        kp => kp,
+fn prefer_ssh_rsa_for_rsa_key(key: Arc<PrivateKey>) -> PrivateKeyWithHashAlg {
+    if key.algorithm().is_rsa() {
+        // russh 0.60：`hash_alg: None` 表示 legacy `ssh-rsa`（SHA-1）
+        PrivateKeyWithHashAlg::new(key, None)
+    } else {
+        PrivateKeyWithHashAlg::new(key, None)
     }
 }
 
@@ -105,13 +111,12 @@ fn expand_tilde(path: &str) -> String {
 pub struct ClientHandler;
 
 #[cfg(not(target_os = "macos"))]
-#[async_trait::async_trait]
 impl russh::client::Handler for ClientHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh_keys::key::PublicKey,
+        _server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
         Ok(true)
     }
@@ -122,24 +127,61 @@ mod tests {
     use super::*;
 
     #[cfg(not(target_os = "macos"))]
-    use russh_keys::key::KeyPair;
+    const RSA_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+        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\n\
+        -----END OPENSSH PRIVATE KEY-----";
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn rsa_keypair_coerced_to_ssh_rsa_name() {
-        let kp = KeyPair::generate_rsa(1024, russh_keys::key::SignatureHash::SHA2_512).expect("gen");
-        assert_eq!(kp.name(), "rsa-sha2-512");
-        let kp = prefer_ssh_rsa_for_rsa_keypair(kp);
-        assert_eq!(kp.name(), "ssh-rsa");
+        let pk = decode_secret_key(RSA_KEY, None).expect("rsa key");
+        assert!(pk.algorithm().is_rsa());
+        assert_ne!(pk.algorithm().as_str(), "ssh-rsa");
+        let wrapped = prefer_ssh_rsa_for_rsa_key(Arc::new(pk));
+        assert_eq!(wrapped.algorithm().as_str(), "ssh-rsa");
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn ed25519_unchanged_by_rsa_coercion() {
-        let kp = KeyPair::generate_ed25519();
-        let name = kp.name();
-        let kp = prefer_ssh_rsa_for_rsa_keypair(kp);
-        assert_eq!(kp.name(), name);
+        let kp = decode_secret_key(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+             b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+             QyNTUxOQAAACAz/RHmMa6IM2FYfBG/RsSj9Wv5h7caCPaBFN8bYPGCRAAAAJgAAAAA\n\
+             AAAAEHNzaC1lZDI1NTE5AAAAIDPzEeYxrogzYVh8Eb9GxKP1a/mHtxoI9oEU3xtg8YJE\n\
+             AAAAQNTy2saBT52rB3S3e3Mf8RPHr3eJIICdDvfQGLSBx7AzM/MR5jGuiDNhWHwRv0bE\n\
+             o/Vr+Ye3Ggj2gRTfG2DxgkAAAANdGVzdEB0ZXN0LmNvbQ==\n\
+             -----END OPENSSH PRIVATE KEY-----",
+            None,
+        )
+        .expect("ed25519 key");
+        let name = kp.algorithm().as_str();
+        let kp = prefer_ssh_rsa_for_rsa_key(Arc::new(kp));
+        assert_eq!(kp.algorithm().as_str(), name);
     }
 
     #[test]

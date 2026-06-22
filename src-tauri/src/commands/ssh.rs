@@ -17,9 +17,7 @@ use crate::ssh::prompt::AuthPromptManager;
 #[cfg(not(target_os = "macos"))]
 use crate::ssh::session::SshSession;
 #[cfg(not(target_os = "macos"))]
-use russh::client::{Handle, KeyboardInteractiveAuthResponse};
-#[cfg(not(target_os = "macos"))]
-use std::sync::Arc;
+use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
 #[cfg(not(target_os = "macos"))]
 use tauri::{AppHandle, Emitter, State};
 #[cfg(target_os = "macos")]
@@ -163,19 +161,19 @@ pub async fn ssh_connect(
                     .await;
                 log::info!("ssh password auth: {:?}", r);
                 match r {
-                    Ok(true) => authenticated = true,
-                    Ok(false) => {}
+                    Ok(AuthResult::Success) => authenticated = true,
+                    Ok(AuthResult::Failure { .. }) => {}
                     Err(e) => log::warn!("password auth error (will try keyboard-interactive): {}", e),
                 }
             }
             AuthMethod::PublicKey(key) => {
                 let r = handle
-                    .authenticate_publickey(&connection.username, Arc::new(key.clone()))
+                    .authenticate_publickey(&connection.username, key.clone())
                     .await;
                 log::info!("ssh publickey auth: {:?}", r);
                 match r {
-                    Ok(true) => authenticated = true,
-                    Ok(false) => {}
+                    Ok(AuthResult::Success) => authenticated = true,
+                    Ok(AuthResult::Failure { .. }) => {}
                     Err(e) => log::warn!("pubkey auth error (will try keyboard-interactive): {}", e),
                 }
             }
@@ -302,7 +300,7 @@ async fn handle_keyboard_interactive(
                 record_event(Some(app), "ssh_ki", "keyboard-interactive: Success");
                 return Ok(true);
             }
-            KeyboardInteractiveAuthResponse::Failure => {
+            KeyboardInteractiveAuthResponse::Failure { .. } => {
                 record_event(Some(app), "ssh_ki", "keyboard-interactive: Failure");
                 return Ok(false);
             }
@@ -518,18 +516,18 @@ pub async fn test_connection(
                     .authenticate_password(&request.username, pwd)
                     .await
                 {
-                    Ok(true) => authenticated = true,
-                    Ok(false) => {}
+                    Ok(AuthResult::Success) => authenticated = true,
+                    Ok(AuthResult::Failure { .. }) => {}
                     Err(_) => {}
                 }
             }
             AuthMethod::PublicKey(key) => {
                 match handle
-                    .authenticate_publickey(&request.username, Arc::new(key.clone()))
+                    .authenticate_publickey(&request.username, key.clone())
                     .await
                 {
-                    Ok(true) => authenticated = true,
-                    Ok(false) => {}
+                    Ok(AuthResult::Success) => authenticated = true,
+                    Ok(AuthResult::Failure { .. }) => {}
                     Err(_) => {}
                 }
             }
@@ -543,7 +541,7 @@ pub async fn test_connection(
 
             match ki_result {
                 KeyboardInteractiveAuthResponse::Success => authenticated = true,
-                KeyboardInteractiveAuthResponse::Failure => {}
+                KeyboardInteractiveAuthResponse::Failure { .. } => {}
                 KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
                     if let Some(pwd) = password_for_ki.as_deref() {
                         if prompts.len() == 1 && !prompts[0].echo {
@@ -567,7 +565,7 @@ pub async fn test_connection(
                                         "连接成功（服务器需要额外验证，如二次验证码）".to_string(),
                                     );
                                 }
-                                KeyboardInteractiveAuthResponse::Failure => {}
+                                KeyboardInteractiveAuthResponse::Failure { .. } => {}
                             }
                         }
                     }

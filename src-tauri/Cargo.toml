@@ -26,19 +26,13 @@ uuid = { version = "1", features = ["v4"] }
 log = { version = "0.4", features = ["std"] }
 thiserror = "2"
 async-trait = "0.1"
-ssh-key = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 portable-pty = "0.8"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-russh = "0.46"
-russh-keys = "0.46"
+russh = "0.60"
 russh-sftp = "2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
-
-# 非 macOS 上使用 vendored russh 0.46 补丁（macOS 走系统 OpenSSH，不依赖 russh）。
-[patch.crates-io]
-russh = { path = "../vendor/russh" }

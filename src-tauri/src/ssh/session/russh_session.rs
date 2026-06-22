@@ -45,7 +45,7 @@ impl SshSession {
                 loop {
                     match cmd_rx.try_recv() {
                         Ok(SessionCmd::Data(data)) => {
-                            let _ = ch.data(&data[..]).await;
+                            let _ = ch.data(std::io::Cursor::new(data)).await;
                         }
                         Ok(SessionCmd::Resize { cols, rows }) => {
                             let _ = ch.window_change(cols, rows, 0, 0).await;
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn test_auth_method_variants() {
         let _pw = AuthMethod::Password("test".to_string());
-        let key = russh_keys::decode_secret_key(
+        let key = russh::keys::decode_secret_key(
             "-----BEGIN OPENSSH PRIVATE KEY-----\n\
              b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
              QyNTUxOQAAACAz/RHmMa6IM2FYfBG/RsSj9Wv5h7caCPaBFN8bYPGCRAAAAJgAAAAA\n\

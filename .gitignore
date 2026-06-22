@@ -31,7 +31,8 @@ dist/
 
 # ---- Tauri / Rust ----
 src-tauri/target/
-src-tauri/.cargo/
+src-tauri/.cargo/*
+!src-tauri/.cargo/audit.toml
 src-tauri/gen/
 src-tauri/.tauri/
 
