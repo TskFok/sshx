@@ -12,6 +12,7 @@
     "clean": "rm -rf node_modules/.vite dist src-tauri/target",
     "clean:all": "rm -rf node_modules dist src-tauri/target",
     "reset": "rm -rf node_modules dist src-tauri/target && pnpm install",
+    "release:check": "node scripts/validate-release-version.mjs",
     "test": "vitest run"
   },
   "dependencies": {

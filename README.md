@@ -77,6 +77,22 @@ pnpm tauri build
 
 构建产物位于 `src-tauri/target/release/bundle/`。
 
+### 发布到 GitHub Releases
+
+项目提供手动触发的 GitHub Actions 发布流程。发布前请先确保以下版本号一致：
+
+- `package.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+
+本地校验当前版本：
+
+```bash
+pnpm release:check -- 0.1.0
+```
+
+校验通过并推送到 GitHub 后，在 GitHub Actions 中运行 `Release` workflow，输入同一个不带 `v` 前缀的版本号。工作流会在 macOS、Windows、Linux 上构建安装包，构建全部成功后自动创建 `v<version>` tag，并将产物发布到 [GitHub Releases](https://github.com/TskFok/sshx/releases)。
+
 ## 开发检查
 
 ```bash
