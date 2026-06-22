@@ -505,22 +505,22 @@ impl SshSession {
 #[cfg(test)]
 mod tests {
     use crate::ssh::auth::AuthMethod;
+    use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
+    use std::sync::Arc;
+
+    const ED25519_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+        QyNTUxOQAAACB2lQXaehRqHJKxEHYc1aAaOHAXEZpdH3M8249EM7wdNgAAAKg/waNvP8Gj\n\
+        bwAAAAtzc2gtZWQyNTUxOQAAACB2lQXaehRqHJKxEHYc1aAaOHAXEZpdH3M8249EM7wdNg\n\
+        AAAECGtGcOTFuji1MzIxujURdzGHWIkQgtXkBOndI8g1Po0naVBdp6FGockrEQdhzVoBo4\n\
+        cBcRml0fczzbj0QzvB02AAAAInVzaG9wYWxAeWFuZ3lpLWRlTWFjQm9vay1Qcm8ubG9jYW\n\
+        wBAgM=\n\
+        -----END OPENSSH PRIVATE KEY-----";
 
     #[test]
     fn test_auth_method_variants() {
         let _pw = AuthMethod::Password("test".to_string());
-        let key = russh::keys::decode_secret_key(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\n\
-             b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
-             QyNTUxOQAAACAz/RHmMa6IM2FYfBG/RsSj9Wv5h7caCPaBFN8bYPGCRAAAAJgAAAAA\n\
-             AAAAEHNzaC1lZDI1NTE5AAAAIDPzEeYxrogzYVh8Eb9GxKP1a/mHtxoI9oEU3xtg8YJE\n\
-             AAAAQNTy2saBT52rB3S3e3Mf8RPHr3eJIICdDvfQGLSBx7AzM/MR5jGuiDNhWHwRv0bE\n\
-             o/Vr+Ye3Ggj2gRTfG2DxgkAAAANdGVzdEB0ZXN0LmNvbQ==\n\
-             -----END OPENSSH PRIVATE KEY-----",
-            None,
-        );
-        if let Ok(kp) = key {
-            let _pk = AuthMethod::PublicKey(kp);
-        }
+        let kp = decode_secret_key(ED25519_KEY, None).expect("ed25519 key");
+        let _pk = AuthMethod::PublicKey(PrivateKeyWithHashAlg::new(Arc::new(kp), None));
     }
 }

@@ -156,32 +156,32 @@ mod tests {
         -----END OPENSSH PRIVATE KEY-----";
 
     #[cfg(not(target_os = "macos"))]
+    const ED25519_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+        QyNTUxOQAAACB2lQXaehRqHJKxEHYc1aAaOHAXEZpdH3M8249EM7wdNgAAAKg/waNvP8Gj\n\
+        bwAAAAtzc2gtZWQyNTUxOQAAACB2lQXaehRqHJKxEHYc1aAaOHAXEZpdH3M8249EM7wdNg\n\
+        AAAECGtGcOTFuji1MzIxujURdzGHWIkQgtXkBOndI8g1Po0naVBdp6FGockrEQdhzVoBo4\n\
+        cBcRml0fczzbj0QzvB02AAAAInVzaG9wYWxAeWFuZ3lpLWRlTWFjQm9vay1Qcm8ubG9jYW\n\
+        wBAgM=\n\
+        -----END OPENSSH PRIVATE KEY-----";
+
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn rsa_keypair_coerced_to_ssh_rsa_name() {
         let pk = decode_secret_key(RSA_KEY, None).expect("rsa key");
         assert!(pk.algorithm().is_rsa());
-        assert_ne!(pk.algorithm().as_str(), "ssh-rsa");
         let wrapped = prefer_ssh_rsa_for_rsa_key(Arc::new(pk));
         assert_eq!(wrapped.algorithm().as_str(), "ssh-rsa");
+        assert_eq!(wrapped.hash_alg(), None);
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn ed25519_unchanged_by_rsa_coercion() {
-        let kp = decode_secret_key(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\n\
-             b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
-             QyNTUxOQAAACAz/RHmMa6IM2FYfBG/RsSj9Wv5h7caCPaBFN8bYPGCRAAAAJgAAAAA\n\
-             AAAAEHNzaC1lZDI1NTE5AAAAIDPzEeYxrogzYVh8Eb9GxKP1a/mHtxoI9oEU3xtg8YJE\n\
-             AAAAQNTy2saBT52rB3S3e3Mf8RPHr3eJIICdDvfQGLSBx7AzM/MR5jGuiDNhWHwRv0bE\n\
-             o/Vr+Ye3Ggj2gRTfG2DxgkAAAANdGVzdEB0ZXN0LmNvbQ==\n\
-             -----END OPENSSH PRIVATE KEY-----",
-            None,
-        )
-        .expect("ed25519 key");
-        let name = kp.algorithm().as_str();
-        let kp = prefer_ssh_rsa_for_rsa_key(Arc::new(kp));
-        assert_eq!(kp.algorithm().as_str(), name);
+        let kp = decode_secret_key(ED25519_KEY, None).expect("ed25519 key");
+        let expected = kp.algorithm();
+        let wrapped = prefer_ssh_rsa_for_rsa_key(Arc::new(kp));
+        assert_eq!(wrapped.algorithm(), expected);
     }
 
     #[test]
