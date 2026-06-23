@@ -169,7 +169,7 @@ version = "0.1.0"
           "src-tauri/Cargo.toml",
         ],
       ],
-      ["git", ["commit", "-m", "发布版本 v0.2.0"]],
+      ["git", ["commit", "-m", "chore(release): 发布版本 v0.2.0"]],
       ["git", ["push", "origin", "main"]],
       ["git", ["tag", "-a", "v0.2.0", "-m", "发布 SSHX v0.2.0"]],
       ["git", ["push", "origin", "refs/tags/v0.2.0"]],

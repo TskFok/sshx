@@ -190,7 +190,7 @@ export async function runRelease({
     writeFile("src-tauri/Cargo.toml", nextFiles.cargoToml);
 
     await runCommand("git", ["add", ...VERSION_FILES]);
-    await runCommand("git", ["commit", "-m", `发布版本 ${tag}`]);
+    await runCommand("git", ["commit", "-m", `chore(release): 发布版本 ${tag}`]);
   }
 
   await runCommand("git", ["push", "origin", branch]);
