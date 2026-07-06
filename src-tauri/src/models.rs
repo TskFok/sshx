@@ -39,11 +39,13 @@ pub struct ConnectionInfo {
     pub sort_order: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthType {
     Password,
     Key,
+    #[serde(rename = "key_password")]
+    KeyPassword,
 }
 
 impl AuthType {
@@ -51,12 +53,14 @@ impl AuthType {
         match self {
             AuthType::Password => "password",
             AuthType::Key => "key",
+            AuthType::KeyPassword => "key_password",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s {
             "key" => AuthType::Key,
+            "key_password" => AuthType::KeyPassword,
             _ => AuthType::Password,
         }
     }
@@ -226,6 +230,21 @@ impl Default for AppSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_auth_type_roundtrip() {
+        assert_eq!(AuthType::from_str("password"), AuthType::Password);
+        assert_eq!(AuthType::from_str("key"), AuthType::Key);
+        assert_eq!(AuthType::from_str("key_password"), AuthType::KeyPassword);
+        assert_eq!(AuthType::KeyPassword.as_str(), "key_password");
+    }
+
+    #[test]
+    fn test_auth_type_key_password_json() {
+        let json = r#""key_password""#;
+        let t: AuthType = serde_json::from_str(json).unwrap();
+        assert!(matches!(t, AuthType::KeyPassword));
+    }
 
     #[test]
     fn test_connection_request_json_omits_keepalive_uses_default() {

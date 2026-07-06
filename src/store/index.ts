@@ -6,7 +6,7 @@ export interface ConnectionInfo {
   host: string;
   port: number;
   username: string;
-  authType: "password" | "key";
+  authType: "password" | "key" | "key_password";
   password?: string | null;
   privateKey?: string | null;
   privateKeyPassphrase?: string | null;

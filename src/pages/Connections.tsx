@@ -88,13 +88,18 @@ import {
   validateImportPassword,
   type ConnectionTransferDialogMode,
 } from "@/lib/connectionTransfer";
+import {
+  authTypeLabel,
+  buildConnectionCredentials,
+  type ConnectionAuthType,
+} from "@/lib/connectionAuth";
 
 interface ConnectionFormData {
   name: string;
   host: string;
   port: number;
   username: string;
-  authType: "password" | "key";
+  authType: ConnectionAuthType;
   password: string;
   privateKey: string;
   privateKeyPassphrase: string;
@@ -204,6 +209,7 @@ export function Connections() {
   }, [groups]);
 
   const handleSave = async () => {
+    const credentials = buildConnectionCredentials(form);
     try {
       if (editingId) {
         await invoke("update_connection", {
@@ -214,10 +220,7 @@ export function Connections() {
             port: form.port,
             username: form.username,
             authType: form.authType,
-            password: form.authType === "password" ? form.password : null,
-            privateKey: form.authType === "key" ? form.privateKey : null,
-            privateKeyPassphrase:
-              form.authType === "key" ? form.privateKeyPassphrase || null : null,
+            ...credentials,
             groupId: form.groupId,
             keepaliveIntervalSecs: form.keepaliveIntervalSecs,
             keepaliveMax: form.keepaliveMax,
@@ -232,10 +235,7 @@ export function Connections() {
             port: form.port,
             username: form.username,
             authType: form.authType,
-            password: form.authType === "password" ? form.password : null,
-            privateKey: form.authType === "key" ? form.privateKey : null,
-            privateKeyPassphrase:
-              form.authType === "key" ? form.privateKeyPassphrase || null : null,
+            ...credentials,
             groupId: form.groupId,
             keepaliveIntervalSecs: form.keepaliveIntervalSecs,
             keepaliveMax: form.keepaliveMax,
@@ -266,7 +266,7 @@ export function Connections() {
       host: fullConn.host,
       port: fullConn.port,
       username: fullConn.username,
-      authType: fullConn.authType as "password" | "key",
+      authType: fullConn.authType as ConnectionAuthType,
       password: "",
       privateKey: fullConn.privateKey ?? "",
       privateKeyPassphrase: "",
@@ -416,6 +416,12 @@ export function Connections() {
       } catch {
         // fall back to list data
       }
+      const credentials = buildConnectionCredentials({
+        authType: fullConn.authType as ConnectionAuthType,
+        password: fullConn.password ?? "",
+        privateKey: fullConn.privateKey ?? "",
+        privateKeyPassphrase: fullConn.privateKeyPassphrase ?? "",
+      });
       await invoke("update_connection", {
         request: {
           id: fullConn.id,
@@ -424,12 +430,7 @@ export function Connections() {
           port: fullConn.port,
           username: fullConn.username,
           authType: fullConn.authType,
-          password: fullConn.authType === "password" ? fullConn.password ?? null : null,
-          privateKey: fullConn.authType === "key" ? fullConn.privateKey ?? null : null,
-          privateKeyPassphrase:
-            fullConn.authType === "key"
-              ? fullConn.privateKeyPassphrase ?? null
-              : null,
+          ...credentials,
           groupId: fullConn.groupId,
           keepaliveIntervalSecs: fullConn.keepaliveIntervalSecs ?? 30,
           keepaliveMax: fullConn.keepaliveMax ?? 3,
@@ -632,6 +633,7 @@ export function Connections() {
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
+    const credentials = buildConnectionCredentials(form);
     try {
       const msg = await invoke<string>("test_connection", {
         request: {
@@ -639,10 +641,7 @@ export function Connections() {
           port: form.port,
           username: form.username,
           authType: form.authType,
-          password: form.authType === "password" ? form.password : null,
-          privateKey: form.authType === "key" ? form.privateKey : null,
-          privateKeyPassphrase:
-            form.authType === "key" ? form.privateKeyPassphrase || null : null,
+          ...credentials,
           keepaliveIntervalSecs: form.keepaliveIntervalSecs,
           keepaliveMax: form.keepaliveMax,
         },
@@ -1047,12 +1046,18 @@ export function Connections() {
                             {conn.authType === "password" ? (
                               <>
                                 <Lock className="mr-1 h-3 w-3" />
-                                密码
+                                {authTypeLabel("password")}
+                              </>
+                            ) : conn.authType === "key_password" ? (
+                              <>
+                                <Key className="mr-1 h-3 w-3" />
+                                <Lock className="mr-1 h-3 w-3" />
+                                {authTypeLabel("key_password")}
                               </>
                             ) : (
                               <>
                                 <Key className="mr-1 h-3 w-3" />
-                                密钥
+                                {authTypeLabel("key")}
                               </>
                             )}
                           </Badge>
@@ -1209,7 +1214,7 @@ export function Connections() {
               <Label>认证方式</Label>
               <Select
                 value={form.authType}
-                onValueChange={(v: "password" | "key") =>
+                onValueChange={(v: ConnectionAuthType) =>
                   setForm({ ...form, authType: v })
                 }
               >
@@ -1219,6 +1224,7 @@ export function Connections() {
                 <SelectContent>
                   <SelectItem value="password">密码认证</SelectItem>
                   <SelectItem value="key">密钥认证</SelectItem>
+                  <SelectItem value="key_password">密钥 + 密码</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1263,6 +1269,22 @@ export function Connections() {
                     }
                   />
                 </div>
+                {form.authType === "key_password" && (
+                  <div className="space-y-2">
+                    <Label>账号密码</Label>
+                    <Input
+                      type="password"
+                      placeholder="公钥认证后的账号密码"
+                      value={form.password}
+                      onChange={(e) =>
+                        setForm({ ...form, password: e.target.value })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      适用于堡垒机等需先公钥、再密码或二次验证的场景
+                    </p>
+                  </div>
+                )}
               </>
             )}
             <div className="grid grid-cols-2 gap-4 border-t pt-4">

@@ -520,6 +520,11 @@ mod tests {
     fn test_auth_method_variants() {
         let _pw = AuthMethod::Password("test".to_string());
         let kp = decode_secret_key(ED25519_KEY, None).expect("ed25519 key");
-        let _pk = AuthMethod::PublicKey(PrivateKeyWithHashAlg::new(Arc::new(kp), None));
+        let pk = PrivateKeyWithHashAlg::new(Arc::new(kp), None);
+        let _pub = AuthMethod::PublicKey(pk.clone());
+        let _both = AuthMethod::KeyAndPassword {
+            public_key: pk,
+            password: "pwd".into(),
+        };
     }
 }

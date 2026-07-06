@@ -815,6 +815,24 @@ fn parse_sftp_progress_percent(line: &str) -> Option<u8> {
     None
 }
 
+fn append_pubkey_auth_args(args: &mut Vec<String>, key_path: &str, allow_password: bool) {
+    args.push("-i".to_string());
+    args.push(key_path.to_string());
+    args.push("-o".to_string());
+    args.push("IdentitiesOnly=yes".to_string());
+    let preferred = if allow_password {
+        "publickey,keyboard-interactive,password"
+    } else {
+        "publickey,keyboard-interactive"
+    };
+    args.push("-o".to_string());
+    args.push(format!("PreferredAuthentications={preferred}"));
+    args.push("-o".to_string());
+    args.push("KbdInteractiveAuthentication=yes".to_string());
+    args.push("-o".to_string());
+    args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+}
+
 /// 供复用连接的 `sftp` 子进程使用的参数（`BatchMode`、`ControlMaster=no` 与同主机认证选项）。
 fn build_sftp_slave_prefix(
     control_path: &str,
@@ -851,16 +869,10 @@ fn build_sftp_slave_prefix(
             args.push("KbdInteractiveAuthentication=yes".to_string());
         }
         AuthMethod::KeyFile(path) => {
-            args.push("-i".to_string());
-            args.push(path.clone());
-            args.push("-o".to_string());
-            args.push("IdentitiesOnly=yes".to_string());
-            args.push("-o".to_string());
-            args.push("PreferredAuthentications=publickey,keyboard-interactive".to_string());
-            args.push("-o".to_string());
-            args.push("KbdInteractiveAuthentication=yes".to_string());
-            args.push("-o".to_string());
-            args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+            append_pubkey_auth_args(&mut args, path, false);
+        }
+        AuthMethod::KeyAndPassword { key_path, .. } => {
+            append_pubkey_auth_args(&mut args, key_path, true);
         }
     }
     Ok((args, format!("{username}@{host}")))
@@ -902,16 +914,10 @@ fn build_ssh_slave_prefix(
             args.push("KbdInteractiveAuthentication=yes".to_string());
         }
         AuthMethod::KeyFile(path) => {
-            args.push("-i".to_string());
-            args.push(path.clone());
-            args.push("-o".to_string());
-            args.push("IdentitiesOnly=yes".to_string());
-            args.push("-o".to_string());
-            args.push("PreferredAuthentications=publickey,keyboard-interactive".to_string());
-            args.push("-o".to_string());
-            args.push("KbdInteractiveAuthentication=yes".to_string());
-            args.push("-o".to_string());
-            args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+            append_pubkey_auth_args(&mut args, path, false);
+        }
+        AuthMethod::KeyAndPassword { key_path, .. } => {
+            append_pubkey_auth_args(&mut args, key_path, true);
         }
     }
     Ok((args, format!("{username}@{host}")))
@@ -981,18 +987,10 @@ fn build_ssh_args(
             args.push("KbdInteractiveAuthentication=yes".to_string());
         }
         AuthMethod::KeyFile(path) => {
-            args.push("-i".to_string());
-            args.push(path.clone());
-            // 仅用 -i 指定的密钥，避免 ssh-agent 里其他密钥先尝试导致多余失败（JumpServer 对失败次数敏感）。
-            args.push("-o".to_string());
-            args.push("IdentitiesOnly=yes".to_string());
-            args.push("-o".to_string());
-            args.push("PreferredAuthentications=publickey,keyboard-interactive".to_string());
-            args.push("-o".to_string());
-            args.push("KbdInteractiveAuthentication=yes".to_string());
-            // 用户公钥若为 RSA，且服务端只接受 ssh-rsa 签名（老 JumpServer），需同时放开客户端公钥算法。
-            args.push("-o".to_string());
-            args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+            append_pubkey_auth_args(&mut args, path, false);
+        }
+        AuthMethod::KeyAndPassword { key_path, .. } => {
+            append_pubkey_auth_args(&mut args, key_path, true);
         }
     }
 
@@ -1155,15 +1153,15 @@ async fn run_auth_until_ready(
             }
         }
 
-        if let AuthMethod::Password(p) = auth {
+        if let Some(p) = auth.password_for_ki() {
             if should_offer_password_prompt(&scan) && !password_sent {
                 password_sent = true;
                 record_event(Some(&app), "ssh_ki", "OpenSSH: 自动应答密码提示");
-                pty_write_line(writer, p.as_str()).await;
+                pty_write_line(writer, p).await;
             }
         }
 
-        if let AuthMethod::KeyFile(_) = auth {
+        if auth.key_path().is_some() {
             if let Some(pp) = key_passphrase {
                 if scan_contains_passphrase_prompt(&scan) && !passphrase_sent {
                     passphrase_sent = true;
@@ -1568,6 +1566,30 @@ mod tests {
         assert!(args.iter().any(|a| a == "ControlMaster=yes"));
         assert!(args.iter().any(|a| a == "ControlPersist=no"));
         assert!(args.iter().any(|a| *a == "ControlPath=/tmp/sshx-test.sock"));
+    }
+
+    #[test]
+    fn build_ssh_args_key_password_includes_password_auth() {
+        let args = build_ssh_args(
+            "h",
+            22,
+            "u",
+            &AuthMethod::KeyAndPassword {
+                key_path: "/path/to/key".into(),
+                password: "secret".into(),
+            },
+            0,
+            0,
+            "/log",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(args.contains(&"-i".into()));
+        assert!(args.contains(&"/path/to/key".into()));
+        assert!(args
+            .iter()
+            .any(|a| a == "PreferredAuthentications=publickey,keyboard-interactive,password"));
     }
 
     #[test]

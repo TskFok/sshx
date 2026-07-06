@@ -25,8 +25,69 @@ pub enum AuthMethod {
     /// macOS：使用系统 OpenSSH，仅传递密钥路径。
     #[cfg(target_os = "macos")]
     KeyFile(String),
+    /// macOS：公钥认证后再使用账号密码（如堡垒机密钥+密码双因子）。
+    #[cfg(target_os = "macos")]
+    KeyAndPassword {
+        key_path: String,
+        password: String,
+    },
     #[cfg(not(target_os = "macos"))]
     PublicKey(PrivateKeyWithHashAlg),
+    /// 非 macOS：公钥认证后再尝试密码 / keyboard-interactive。
+    #[cfg(not(target_os = "macos"))]
+    KeyAndPassword {
+        public_key: PrivateKeyWithHashAlg,
+        password: String,
+    },
+}
+
+impl AuthMethod {
+    /// 供 keyboard-interactive 或 OpenSSH PTY 自动填入账号密码。
+    pub fn password_for_ki(&self) -> Option<&str> {
+        match self {
+            AuthMethod::Password(p) => Some(p),
+            AuthMethod::KeyAndPassword { password, .. } => Some(password),
+            _ => None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn key_path(&self) -> Option<&str> {
+        match self {
+            AuthMethod::KeyFile(path) => Some(path),
+            AuthMethod::KeyAndPassword { key_path, .. } => Some(key_path),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_key_from_path(
+    key_path: &str,
+    passphrase: Option<&str>,
+) -> Result<(String, PrivateKeyWithHashAlg), AuthError> {
+    let expanded = expand_tilde(key_path);
+    let path = Path::new(&expanded);
+
+    if !path.exists() {
+        return Err(AuthError::FileReadError(format!(
+            "key file not found: {}",
+            key_path
+        )));
+    }
+
+    let key_content = std::fs::read_to_string(path)
+        .map_err(|e| AuthError::FileReadError(format!("{}: {}", key_path, e)))?;
+
+    let key_pair = if let Some(phrase) = passphrase {
+        decode_secret_key(&key_content, Some(phrase))
+            .map_err(|e| AuthError::InvalidKey(e.to_string()))?
+    } else {
+        decode_secret_key(&key_content, None)
+            .map_err(|e| AuthError::InvalidKey(e.to_string()))?
+    };
+    let key_pair = prefer_ssh_rsa_for_rsa_key(Arc::new(key_pair));
+    Ok((expanded, key_pair))
 }
 
 pub fn prepare_auth(
@@ -45,38 +106,56 @@ pub fn prepare_auth(
             let key_path = private_key_path
                 .ok_or_else(|| AuthError::Failed("private key path is required".to_string()))?;
 
-            let expanded = expand_tilde(key_path);
-            let path = Path::new(&expanded);
-
-            if !path.exists() {
-                return Err(AuthError::FileReadError(format!(
-                    "key file not found: {}",
-                    key_path
-                )));
-            }
-
             #[cfg(target_os = "macos")]
             {
+                let expanded = expand_tilde(key_path);
+                let path = Path::new(&expanded);
+                if !path.exists() {
+                    return Err(AuthError::FileReadError(format!(
+                        "key file not found: {}",
+                        key_path
+                    )));
+                }
                 let _ = passphrase;
                 Ok(AuthMethod::KeyFile(expanded))
             }
 
             #[cfg(not(target_os = "macos"))]
             {
-                let key_content = std::fs::read_to_string(path)
-                    .map_err(|e| AuthError::FileReadError(format!("{}: {}", key_path, e)))?;
-
-                let key_pair = if let Some(phrase) = passphrase {
-                    decode_secret_key(&key_content, Some(phrase))
-                        .map_err(|e| AuthError::InvalidKey(e.to_string()))?
-                } else {
-                    decode_secret_key(&key_content, None)
-                        .map_err(|e| AuthError::InvalidKey(e.to_string()))?
-                };
-                // OpenSSH 格式 RSA 默认 rsa-sha2-512；JumpServer 等仅接受 ssh-rsa（SHA1）时需与
-                // 系统 OpenSSH `PubkeyAcceptedAlgorithms=+ssh-rsa` 行为一致。
-                let key_pair = prefer_ssh_rsa_for_rsa_key(Arc::new(key_pair));
+                let (expanded, key_pair) = load_key_from_path(key_path, passphrase)?;
+                let _ = expanded;
                 Ok(AuthMethod::PublicKey(key_pair))
+            }
+        }
+        AuthType::KeyPassword => {
+            let key_path = private_key_path
+                .ok_or_else(|| AuthError::Failed("private key path is required".to_string()))?;
+            let pwd =
+                password.ok_or_else(|| AuthError::Failed("password is required".to_string()))?;
+
+            #[cfg(target_os = "macos")]
+            {
+                let expanded = expand_tilde(key_path);
+                let path = Path::new(&expanded);
+                if !path.exists() {
+                    return Err(AuthError::FileReadError(format!(
+                        "key file not found: {}",
+                        key_path
+                    )));
+                }
+                Ok(AuthMethod::KeyAndPassword {
+                    key_path: expanded,
+                    password: pwd.to_string(),
+                })
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let (_expanded, key_pair) = load_key_from_path(key_path, passphrase)?;
+                Ok(AuthMethod::KeyAndPassword {
+                    public_key: key_pair,
+                    password: pwd.to_string(),
+                })
             }
         }
     }
@@ -182,6 +261,68 @@ mod tests {
         let expected = kp.algorithm();
         let wrapped = prefer_ssh_rsa_for_rsa_key(Arc::new(kp));
         assert_eq!(wrapped.algorithm(), expected);
+    }
+
+    #[test]
+    fn test_prepare_auth_key_password_missing_password() {
+        let result = prepare_auth(
+            &AuthType::KeyPassword,
+            None,
+            Some("/nonexistent/path/to/key"),
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prepare_auth_key_password_missing_key() {
+        let result = prepare_auth(&AuthType::KeyPassword, Some("pwd"), None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_for_ki() {
+        let pw = AuthMethod::Password("secret".into());
+        assert_eq!(pw.password_for_ki(), Some("secret"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_prepare_auth_key_password_with_rsa_key() {
+        let dir = std::env::temp_dir().join(format!("sshx-kp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("id_rsa");
+        std::fs::write(&key_path, RSA_KEY).unwrap();
+        let r = prepare_auth(
+            &AuthType::KeyPassword,
+            Some("account-pwd"),
+            Some(key_path.to_str().unwrap()),
+            None,
+        );
+        assert!(matches!(r, Ok(AuthMethod::KeyAndPassword { .. })));
+        if let Ok(AuthMethod::KeyAndPassword { password, .. }) = r {
+            assert_eq!(password, "account-pwd");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_prepare_key_password_returns_path_and_password() {
+        let p = std::env::temp_dir().join(format!("sshx-kp-key-{}", std::process::id()));
+        std::fs::write(&p, "x").unwrap();
+        let r = prepare_auth(
+            &AuthType::KeyPassword,
+            Some("account-pwd"),
+            Some(p.to_str().unwrap()),
+            None,
+        );
+        assert!(matches!(r, Ok(AuthMethod::KeyAndPassword { .. })));
+        if let Ok(AuthMethod::KeyAndPassword { password, key_path }) = r {
+            assert_eq!(password, "account-pwd");
+            assert!(key_path.ends_with(p.file_name().unwrap().to_str().unwrap()));
+        }
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

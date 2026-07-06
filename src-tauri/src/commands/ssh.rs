@@ -147,10 +147,7 @@ pub async fn ssh_connect(
             })?;
         record_event(Some(&app), "ssh_connect", "SSH 传输层已建立，开始用户认证");
 
-        let password_for_ki = match &auth {
-            AuthMethod::Password(pwd) => Some(pwd.clone()),
-            _ => None,
-        };
+        let password_for_ki = auth.password_for_ki().map(|s| s.to_string());
 
         let mut authenticated = false;
 
@@ -175,6 +172,31 @@ pub async fn ssh_connect(
                     Ok(AuthResult::Success) => authenticated = true,
                     Ok(AuthResult::Failure { .. }) => {}
                     Err(e) => log::warn!("pubkey auth error (will try keyboard-interactive): {}", e),
+                }
+            }
+            AuthMethod::KeyAndPassword { public_key, password } => {
+                let r = handle
+                    .authenticate_publickey(&connection.username, public_key.clone())
+                    .await;
+                log::info!("ssh publickey auth (key+password): {:?}", r);
+                match r {
+                    Ok(AuthResult::Success) => authenticated = true,
+                    Ok(AuthResult::Failure { .. }) => {}
+                    Err(e) => log::warn!("pubkey auth error (key+password): {}", e),
+                }
+                if !authenticated {
+                    let r = handle
+                        .authenticate_password(&connection.username, password)
+                        .await;
+                    log::info!("ssh password auth (key+password): {:?}", r);
+                    match r {
+                        Ok(AuthResult::Success) => authenticated = true,
+                        Ok(AuthResult::Failure { .. }) => {}
+                        Err(e) => log::warn!(
+                            "password auth error after pubkey (will try keyboard-interactive): {}",
+                            e
+                        ),
+                    }
                 }
             }
         }
@@ -503,10 +525,7 @@ pub async fn test_connection(
 
         record_event(Some(&app), "test_connection", "传输层已建立，开始认证");
 
-        let password_for_ki = match &auth {
-            AuthMethod::Password(pwd) => Some(pwd.clone()),
-            _ => None,
-        };
+        let password_for_ki = auth.password_for_ki().map(|s| s.to_string());
 
         let mut authenticated = false;
 
@@ -529,6 +548,26 @@ pub async fn test_connection(
                     Ok(AuthResult::Success) => authenticated = true,
                     Ok(AuthResult::Failure { .. }) => {}
                     Err(_) => {}
+                }
+            }
+            AuthMethod::KeyAndPassword { public_key, password } => {
+                match handle
+                    .authenticate_publickey(&request.username, public_key.clone())
+                    .await
+                {
+                    Ok(AuthResult::Success) => authenticated = true,
+                    Ok(AuthResult::Failure { .. }) => {}
+                    Err(_) => {}
+                }
+                if !authenticated {
+                    match handle
+                        .authenticate_password(&request.username, password)
+                        .await
+                    {
+                        Ok(AuthResult::Success) => authenticated = true,
+                        Ok(AuthResult::Failure { .. }) => {}
+                        Err(_) => {}
+                    }
                 }
             }
         }
