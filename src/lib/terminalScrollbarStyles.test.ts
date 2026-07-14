@@ -6,10 +6,8 @@ const terminalStyles = readFileSync(
   "utf8"
 );
 
-function cssBlock(source: string, header: string): string {
+function cssBlockAt(source: string, header: string, start: number): string {
   const marker = `${header} {`;
-  const start = source.indexOf(marker);
-  expect(start, `缺少样式块：${header}`).toBeGreaterThanOrEqual(0);
 
   let depth = 1;
   for (let index = start + marker.length; index < source.length; index += 1) {
@@ -21,35 +19,69 @@ function cssBlock(source: string, header: string): string {
   expect.fail(`样式块未闭合：${header}`);
 }
 
+function cssBlockContaining(
+  source: string,
+  header: string,
+  value: string
+): string {
+  const marker = `${header} {`;
+  let searchStart = 0;
+
+  while (searchStart < source.length) {
+    const start = source.indexOf(marker, searchStart);
+    if (start < 0) break;
+    const block = cssBlockAt(source, header, start);
+    if (block.includes(value)) return block;
+    searchStart = start + marker.length + block.length + 1;
+  }
+
+  expect.fail(`缺少包含 ${value} 的样式块：${header}`);
+}
+
+function topLevelCssBlock(source: string, header: string): string {
+  const marker = `${header} {`;
+  let depth = 0;
+
+  for (let index = 0; index < source.length; index += 1) {
+    if (depth === 0 && source.startsWith(marker, index)) {
+      return cssBlockAt(source, header, index);
+    }
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+  }
+
+  expect.fail(`缺少顶层样式块：${header}`);
+}
+
+function occurrenceCount(source: string, value: string): number {
+  return source.split(value).length - 1;
+}
+
 describe("terminal scrollbar styles", () => {
-  it("用互斥分支兼容标准和 WebKit 滚动条样式", () => {
-    const standardBranch = cssBlock(
+  it("用条件标准 fallback 和无条件 WebKit 规则兼容滚动条", () => {
+    const baseLayer = cssBlockContaining(
       terminalStyles,
+      "@layer base",
+      ".xterm .xterm-viewport"
+    );
+    const standardFallback = topLevelCssBlock(
+      baseLayer,
       "@supports not selector(::-webkit-scrollbar)"
     );
-    const webkitBranch = cssBlock(
-      terminalStyles,
+
+    expect(terminalStyles).not.toContain(
       "@supports selector(::-webkit-scrollbar)"
     );
-
-    expect(standardBranch).not.toContain("::-webkit-scrollbar");
-    expect(webkitBranch).not.toContain("scrollbar-width:");
-    expect(webkitBranch).not.toContain("scrollbar-color:");
-    expect(terminalStyles.match(/scrollbar-width:/g)).toHaveLength(
-      standardBranch.match(/scrollbar-width:/g)?.length ?? 0
+    expect(standardFallback).not.toContain("::-webkit-scrollbar");
+    expect(occurrenceCount(terminalStyles, "scrollbar-width:")).toBe(
+      occurrenceCount(standardFallback, "scrollbar-width:")
     );
-    expect(terminalStyles.match(/scrollbar-color:/g)).toHaveLength(
-      standardBranch.match(/scrollbar-color:/g)?.length ?? 0
-    );
-    expect(
-      terminalStyles.match(/\.xterm \.xterm-viewport::-webkit-scrollbar/g)
-    ).toHaveLength(
-      webkitBranch.match(/\.xterm \.xterm-viewport::-webkit-scrollbar/g)
-        ?.length ?? 0
+    expect(occurrenceCount(terminalStyles, "scrollbar-color:")).toBe(
+      occurrenceCount(standardFallback, "scrollbar-color:")
     );
 
-    const standardViewport = cssBlock(
-      standardBranch,
+    const standardViewport = topLevelCssBlock(
+      standardFallback,
       ".xterm .xterm-viewport"
     );
     expect(standardViewport).toContain("scrollbar-width: thin");
@@ -57,28 +89,28 @@ describe("terminal scrollbar styles", () => {
       "scrollbar-color: transparent transparent"
     );
 
-    const standardHoveredViewport = cssBlock(
-      standardBranch,
+    const standardHoveredViewport = topLevelCssBlock(
+      standardFallback,
       ".xterm .xterm-viewport:hover"
     );
     expect(standardHoveredViewport).toContain(
       "scrollbar-color: rgb(148 163 184 / 55%) transparent"
     );
 
-    const scrollbar = cssBlock(
-      webkitBranch,
+    const scrollbar = topLevelCssBlock(
+      baseLayer,
       ".xterm .xterm-viewport::-webkit-scrollbar"
     );
     expect(scrollbar).toContain("width: 8px");
 
-    const track = cssBlock(
-      webkitBranch,
+    const track = topLevelCssBlock(
+      baseLayer,
       ".xterm .xterm-viewport::-webkit-scrollbar-track"
     );
     expect(track).toContain("background: transparent");
 
-    const thumb = cssBlock(
-      webkitBranch,
+    const thumb = topLevelCssBlock(
+      baseLayer,
       ".xterm .xterm-viewport::-webkit-scrollbar-thumb"
     );
     expect(thumb).toContain("background-color: transparent");
@@ -86,22 +118,22 @@ describe("terminal scrollbar styles", () => {
     expect(thumb).toContain("border: 2px solid transparent");
     expect(thumb).toContain("border-radius: 9999px");
 
-    const hoveredViewport = cssBlock(
-      webkitBranch,
+    const hoveredViewport = topLevelCssBlock(
+      baseLayer,
       ".xterm .xterm-viewport:hover"
     );
     expect(hoveredViewport).toContain("--sshx-scrollbar-hover-repaint: ;");
 
-    const hoveredThumb = cssBlock(
-      webkitBranch,
+    const hoveredThumb = topLevelCssBlock(
+      baseLayer,
       ".xterm .xterm-viewport:hover::-webkit-scrollbar-thumb"
     );
     expect(hoveredThumb).toContain(
       "background-color: rgb(148 163 184 / 55%)"
     );
 
-    const directlyHoveredThumb = cssBlock(
-      webkitBranch,
+    const directlyHoveredThumb = topLevelCssBlock(
+      baseLayer,
       ".xterm .xterm-viewport::-webkit-scrollbar-thumb:hover"
     );
     expect(directlyHoveredThumb).toContain(
