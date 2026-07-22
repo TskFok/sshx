@@ -30,7 +30,7 @@ docs: 补充快速开始说明
 test: 补充文件传输连接单测
 ```
 
-版本发布提交使用 `chore(release): 发布版本 vX.Y.Z`，不会出现在 Release Notes 中。
+版本发布提交使用 `发布：vX.Y.Z`（非 Conventional Commits 前缀），不会出现在 Release Notes 中。
 
 ## Release Notes
 

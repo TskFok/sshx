@@ -1,216 +1,216 @@
-import { execFile } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import * as nodeFs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
-  assertProjectVersionsMatch,
-  parseCargoPackageVersion,
-  parseReleaseVersion,
-} from "./validate-release-version.mjs";
+  getConsistentVersion,
+  parseReleaseArgs,
+  resolveTargetVersion,
+  updateVersionContents,
+} from "./release-core.mjs";
 
-const execFileAsync = promisify(execFile);
-const BUMP_TYPES = ["patch", "minor", "major"];
-const VERSION_FILES = [
-  "package.json",
-  "src-tauri/tauri.conf.json",
-  "src-tauri/Cargo.toml",
-];
+const FILES = {
+  packageJson: "package.json",
+  tauriConfig: "src-tauri/tauri.conf.json",
+  cargoToml: "src-tauri/Cargo.toml",
+  cargoLock: "src-tauri/Cargo.lock",
+};
+const VERSION_FILES = Object.values(FILES);
 
-export function parseReleaseArgs(argv) {
-  const positional = argv.filter((arg) => arg !== "--");
-
-  if (positional[0] === "current") {
-    if (positional.length > 1) {
-      throw new Error("Release current mode does not accept a bump type");
-    }
-
-    return {
-      bumpType: "patch",
-      useCurrentVersion: true,
-    };
-  }
-
-  const bumpType = positional[0] ?? "patch";
-
-  if (!BUMP_TYPES.includes(bumpType)) {
-    throw new Error("Release bump type must be one of: patch, minor, major");
-  }
-
-  if (positional.length > 1) {
-    throw new Error("Release command accepts at most one bump type");
-  }
-
-  return {
-    bumpType,
-    useCurrentVersion: false,
-  };
-}
-
-export function bumpVersion(version, bumpType) {
-  const release = parseReleaseVersion(version);
-  const [major, minor, patch] = release.version
-    .split("-")[0]
-    .split(".")
-    .map((part) => Number.parseInt(part, 10));
-
-  if (bumpType === "major") {
-    return `${major + 1}.0.0`;
-  }
-
-  if (bumpType === "minor") {
-    return `${major}.${minor + 1}.0`;
-  }
-
-  return `${major}.${minor}.${patch + 1}`;
-}
-
-export function applyVersionToProjectFiles(files, nextVersion) {
-  const packageJson = JSON.parse(files.packageJson);
-  const tauriConfig = JSON.parse(files.tauriConfig);
-
-  packageJson.version = nextVersion;
-  tauriConfig.version = nextVersion;
-
-  return {
-    packageJson: `${JSON.stringify(packageJson, null, 2)}\n`,
-    tauriConfig: `${JSON.stringify(tauriConfig, null, 2)}\n`,
-    cargoToml: updateCargoPackageVersion(files.cargoToml, nextVersion),
-  };
-}
-
-function updateCargoPackageVersion(cargoToml, nextVersion) {
-  let inPackageSection = false;
-  let didUpdate = false;
-
-  const updated = cargoToml
-    .split(/\r?\n/)
-    .map((line) => {
-      const trimmed = line.trim();
-
-      if (/^\[[^\]]+\]$/.test(trimmed)) {
-        inPackageSection = trimmed === "[package]";
-        return line;
-      }
-
-      if (!inPackageSection || didUpdate) {
-        return line;
-      }
-
-      const match = line.match(/^(\s*version\s*=\s*")([^"]+)(".*)$/);
-      if (!match) {
-        return line;
-      }
-
-      didUpdate = true;
-      return `${match[1]}${nextVersion}${match[3]}`;
-    })
-    .join("\n");
-
-  if (!didUpdate) {
-    throw new Error("Could not find package.version in src-tauri/Cargo.toml");
-  }
-
-  return updated;
-}
-
-function getProjectVersionsFromFiles(files) {
-  return {
-    packageJson: JSON.parse(files.packageJson).version,
-    tauriConfig: JSON.parse(files.tauriConfig).version,
-    cargoToml: parseCargoPackageVersion(files.cargoToml),
-  };
-}
-
-async function defaultRunCommand(command, args, cwd) {
-  const { stdout } = await execFileAsync(command, args, {
+export function systemExecute(command, args, { cwd, capture = false } = {}) {
+  const result = spawnSync(command, args, {
     cwd,
-    maxBuffer: 10 * 1024 * 1024,
+    encoding: "utf8",
+    stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
-  return stdout;
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = capture ? (result.stderr || result.stdout || "").trim() : "";
+    throw new Error(`${command} ${args.join(" ")} 执行失败${detail ? `：${detail}` : ""}`);
+  }
+  return capture ? result.stdout.trim() : "";
 }
 
-export async function runRelease({
-  argv = process.argv.slice(2),
-  cwd = process.cwd(),
-  readFile = (filePath) => readFileSync(path.join(cwd, filePath), "utf8"),
-  writeFile = (filePath, content) =>
-    writeFileSync(path.join(cwd, filePath), content, "utf8"),
-  runCommand = (command, args) => defaultRunCommand(command, args, cwd),
-} = {}) {
-  const { bumpType, useCurrentVersion } = parseReleaseArgs(argv);
-  const status = await runCommand("git", ["status", "--porcelain"]);
+function readContents(cwd, fileSystem) {
+  return Object.fromEntries(
+    Object.entries(FILES).map(([key, relativePath]) => [
+      key,
+      fileSystem.readFileSync(path.join(cwd, relativePath), "utf8"),
+    ]),
+  );
+}
 
-  if (status.trim()) {
-    throw new Error("Working tree must be clean before running release.");
+function writeContents(cwd, fileSystem, contents) {
+  for (const [key, relativePath] of Object.entries(FILES)) {
+    fileSystem.writeFileSync(path.join(cwd, relativePath), contents[key], "utf8");
   }
+}
 
-  const branch = (
-    await runCommand("git", ["branch", "--show-current"])
-  ).trim();
-
-  if (!branch) {
-    throw new Error("Could not determine current git branch.");
-  }
-
-  const currentFiles = {
-    packageJson: readFile("package.json"),
-    tauriConfig: readFile("src-tauri/tauri.conf.json"),
-    cargoToml: readFile("src-tauri/Cargo.toml"),
-  };
-  const currentVersions = getProjectVersionsFromFiles(currentFiles);
-  const currentVersion = currentVersions.packageJson;
-
-  assertProjectVersionsMatch(currentVersion, currentVersions);
-
-  const version = useCurrentVersion
-    ? currentVersion
-    : bumpVersion(currentVersion, bumpType);
-  const { tag } = parseReleaseVersion(version);
-
-  const existingRemoteTag = await runCommand("git", [
-    "ls-remote",
-    "--tags",
+function ensureBranchSynchronized(cwd, branch, execute) {
+  const run = (command, args, capture = false) => execute(command, args, { cwd, capture });
+  run("git", [
+    "fetch",
+    "--no-tags",
     "origin",
-    `refs/tags/${tag}`,
+    `refs/heads/${branch}:refs/remotes/origin/${branch}`,
   ]);
-
-  if (existingRemoteTag.trim()) {
-    throw new Error(`Remote tag ${tag} already exists.`);
+  const sync = run(
+    "git",
+    ["rev-list", "--left-right", "--count", `HEAD...origin/${branch}`],
+    true,
+  );
+  if (!/^0\s+0$/.test(sync)) {
+    throw new Error(`当前分支与 origin/${branch} 未完全同步：${sync}`);
   }
-
-  if (!useCurrentVersion) {
-    const nextFiles = applyVersionToProjectFiles(currentFiles, version);
-    const nextVersions = getProjectVersionsFromFiles(nextFiles);
-
-    assertProjectVersionsMatch(version, nextVersions);
-
-    writeFile("package.json", nextFiles.packageJson);
-    writeFile("src-tauri/tauri.conf.json", nextFiles.tauriConfig);
-    writeFile("src-tauri/Cargo.toml", nextFiles.cargoToml);
-
-    await runCommand("git", ["add", ...VERSION_FILES]);
-    await runCommand("git", ["commit", "-m", `chore(release): 发布版本 ${tag}`]);
-  }
-
-  await runCommand("git", ["push", "origin", branch]);
-  await runCommand("git", ["tag", "-a", tag, "-m", `发布 SSHX ${tag}`]);
-  await runCommand("git", ["push", "origin", `refs/tags/${tag}`]);
-
-  return {
-    version,
-    tag,
-    branch,
-  };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+function repositoryPreflight(cwd, execute) {
+  const run = (command, args, capture = false) => execute(command, args, { cwd, capture });
+  if (run("git", ["status", "--porcelain"], true) !== "") {
+    throw new Error("工作区不干净，请先提交或暂存现有修改");
+  }
+  const branch = run("git", ["branch", "--show-current"], true);
+  if (!branch) throw new Error("当前处于 detached HEAD，不能发布");
+  run("git", ["remote", "get-url", "origin"], true);
+  ensureBranchSynchronized(cwd, branch, execute);
+  return branch;
+}
+
+function ensureNewTag(tag, cwd, execute) {
+  const local = execute("git", ["tag", "--list", tag], { cwd, capture: true });
+  const remote = execute("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`], {
+    cwd,
+    capture: true,
+  });
+  if (local || remote) throw new Error(`标签 ${tag} 已存在；重发当前版本请使用 --current`);
+}
+
+export function resolvePnpmCommand(
+  args,
+  {
+    platform = process.platform,
+    nodePath = process.execPath,
+    npmExecPath = process.env.npm_execpath,
+  } = {},
+) {
+  if (platform !== "win32") return { command: "pnpm", args };
+  if (!npmExecPath) {
+    throw new Error("Windows 下无法定位 pnpm 入口：缺少 npm_execpath");
+  }
+  const extension = path.win32.extname(npmExecPath).toLowerCase();
+  if ([".js", ".cjs", ".mjs"].includes(extension)) {
+    return { command: nodePath, args: [npmExecPath, ...args] };
+  }
+  if ([".exe", ".com"].includes(extension)) {
+    return { command: npmExecPath, args };
+  }
+  throw new Error(
+    `Windows 下不能安全执行 pnpm 入口 ${npmExecPath}：仅支持 .js/.cjs/.mjs 或 .exe/.com`,
+  );
+}
+
+function runPnpm(cwd, execute, args, runtime) {
+  const invocation = resolvePnpmCommand(args, runtime);
+  execute(invocation.command, invocation.args, { cwd });
+}
+
+function runChecks(cwd, execute, runtime) {
+  runPnpm(cwd, execute, ["test"], runtime);
+  runPnpm(cwd, execute, ["build"], runtime);
+  execute("cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml"], { cwd });
+}
+
+export function runRelease({
+  args,
+  cwd = process.cwd(),
+  execute = systemExecute,
+  fileSystem = nodeFs,
+  output = console,
+  runtime,
+}) {
+  const request = parseReleaseArgs(args);
+  const original = readContents(cwd, fileSystem);
+  const current = getConsistentVersion(original);
+  const version = resolveTargetVersion(request, current);
+  const tag = `v${version}`;
+  const branch = repositoryPreflight(cwd, execute);
+  if (request.mode !== "current") ensureNewTag(tag, cwd, execute);
+
+  output.log(`准备发布 ${tag}，开始本地校验……`);
+  runChecks(cwd, execute, runtime);
+
+  if (request.mode === "current") {
+    ensureBranchSynchronized(cwd, branch, execute);
+    execute("git", ["tag", "-f", "-a", tag, "-m", `发布 ${tag}`], { cwd });
+    execute("git", ["push", "--force", "origin", `refs/tags/${tag}`], { cwd });
+    output.log(`${tag} 已重新推送，GitHub Actions 将重新构建 Release。`);
+    return { mode: request.mode, version };
+  }
+
+  let wroteFiles = false;
+  let stagedFiles = false;
+  let committed = false;
   try {
-    const { version, tag, branch } = await runRelease();
-    console.log(`Triggered Release workflow for ${tag} from ${branch}.`);
-    console.log(`Version ${version} has been committed and pushed.`);
+    const updated = updateVersionContents(original, version);
+    wroteFiles = true;
+    writeContents(cwd, fileSystem, updated);
+    execute(
+      "cargo",
+      [
+        "metadata",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--format-version",
+        "1",
+        "--no-deps",
+      ],
+      { cwd, capture: true },
+    );
+    const synchronized = readContents(cwd, fileSystem);
+    if (getConsistentVersion(synchronized) !== version) {
+      throw new Error("Cargo 锁文件未同步到目标版本");
+    }
+    execute("git", ["add", "--", ...VERSION_FILES], { cwd });
+    stagedFiles = true;
+    execute("git", ["commit", "-m", `发布：${tag}`], { cwd });
+    committed = true;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    if (!committed) {
+      if (stagedFiles) {
+        try {
+          execute("git", ["restore", "--staged", "--", ...VERSION_FILES], { cwd });
+        } catch {
+          output.error("无法自动撤销版本文件的暂存，请检查 git status。");
+        }
+      }
+      if (wroteFiles) writeContents(cwd, fileSystem, original);
+    }
+    throw error;
+  }
+  try {
+    execute("git", ["push", "origin", branch], { cwd });
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}；请先推送提交后执行 pnpm release --current`,
+    );
+  }
+  execute("git", ["tag", "-a", tag, "-m", `发布 ${tag}`], { cwd });
+  try {
+    execute("git", ["push", "origin", `refs/tags/${tag}`], { cwd });
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}；请执行 pnpm release --current 重试`,
+    );
+  }
+  output.log(`${tag} 已推送，GitHub Actions 将构建并发布 Release。`);
+  return { mode: request.mode, version };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    runRelease({ args: process.argv.slice(2) });
+  } catch (error) {
+    console.error(`发布失败：${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   }
 }

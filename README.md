@@ -79,27 +79,20 @@ pnpm tauri build
 
 ### 发布到 GitHub Releases
 
-项目提供一键发布命令，会自动递增版本、提交版本变更、推送当前分支，并触发 GitHub Actions `Release` workflow：
+发布命令要求工作区干净、当前分支已与 `origin` 完全同步，并且 Git 凭据具有分支和 Tag 推送权限。命令会先运行前端测试、前端构建和 Rust 测试。
 
 ```bash
 # 默认递增 patch，例如 0.1.0 -> 0.1.1
 pnpm release
 
-# 递增 minor，例如 0.1.0 -> 0.2.0
-pnpm release -- minor
+# 发布指定的更高版本
+pnpm release 1.2.3
 
-# 递增 major，例如 0.1.0 -> 1.0.0
-pnpm release -- major
-
-# 不递增版本，只为当前版本推送 tag 并触发发布
-pnpm release -- current
+# 不改版本，重新发布当前版本
+pnpm release --current
 ```
 
-发布命令要求运行前工作区是干净的，并且当前分支可推送到 `origin`。命令会同步更新以下版本号文件：
-
-- `package.json`
-- `src-tauri/tauri.conf.json`
-- `src-tauri/Cargo.toml`
+普通发布会同步更新前端、Tauri 和 Rust 版本（含 `Cargo.lock`），创建中文版本提交并推送当前分支，然后推送 `v<版本>` Tag。`--current` 会强制把当前版本 Tag 移到当前提交；受保护 Tag 或 Immutable Releases 禁止强推时，远端会拒绝该操作。
 
 如需只校验当前版本一致性，可运行：
 
@@ -107,7 +100,7 @@ pnpm release -- current
 pnpm release:check -- <version>
 ```
 
-发布命令通过推送 `v<version>` tag 自动触发 workflow，不依赖本机安装 GitHub CLI。如果版本提交已经推送但 tag 触发失败，可在修复后运行 `pnpm release -- current` 为当前版本重新触发发布。
+如果分支推送后 Tag 推送失败，修复远端问题后执行 `pnpm release --current`。如果 GitHub Actions 构建失败，提交并推送修复后同样执行 `pnpm release --current`。
 
 发布 workflow 会在 macOS、Windows、Linux 上构建安装包，并将产物发布到 [GitHub Releases](https://github.com/TskFok/sshx/releases)。也可以在 GitHub Actions 页面手动运行 `Release` workflow，输入不带 `v` 前缀的版本号，由 workflow 创建 tag 并发布。
 
