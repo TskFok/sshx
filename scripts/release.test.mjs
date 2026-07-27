@@ -1,5 +1,8 @@
 // @vitest-environment node
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   getConsistentVersion,
@@ -8,6 +11,20 @@ import {
   updateVersionContents,
 } from "./release-core.mjs";
 import { runRelease } from "./release.mjs";
+
+const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+describe("依赖兼容性", () => {
+  it("将 react-router 安全覆盖限制在 React 18 兼容的 7.x", () => {
+    const workspace = readFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "utf8");
+    const overrides = [...workspace.matchAll(/^\s*react-router@[^:]+:\s*'([^']+)'$/gm)].map(
+      ([, version]) => version,
+    );
+
+    expect(overrides).toHaveLength(5);
+    expect(overrides).toEqual(Array(5).fill(">=7.18.0 <8.0.0"));
+  });
+});
 
 describe("发布参数", () => {
   it("无参数时递增补丁号", () => {
