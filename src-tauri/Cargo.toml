@@ -1,6 +1,6 @@
 [package]
 name = "sshx"
-version = "0.1.5"
+version = "0.1.6"
 description = "Cross-platform SSH Connection Manager"
 authors = ["sshx"]
 edition = "2021"
