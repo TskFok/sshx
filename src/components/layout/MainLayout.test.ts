@@ -31,6 +31,9 @@ async function importMainLayoutForRoute(
   vi.doMock("@/pages/TerminalPage", () => ({
     TerminalPage: () => null,
   }));
+  vi.doMock("@/pages/FileTransferWorkspace", () => ({
+    FileTransferWorkspace: () => null,
+  }));
 
   return import("./MainLayout");
 }
@@ -43,13 +46,14 @@ describe("MainLayout scroll restoration", () => {
     vi.doUnmock("./Header");
     vi.doUnmock("@/components/ui/tooltip");
     vi.doUnmock("@/pages/TerminalPage");
+    vi.doUnmock("@/pages/FileTransferWorkspace");
     vi.resetModules();
   });
 
   it("resets the reused page scroll container to the top on route changes", async () => {
     const scrollContainer = { scrollTop: 320 };
     const { MainLayout } = await importMainLayoutForRoute(
-      "/file-transfer/conn-1",
+      "/connections",
       scrollContainer
     );
 
@@ -62,6 +66,18 @@ describe("MainLayout scroll restoration", () => {
     const scrollContainer = { scrollTop: 320 };
     const { MainLayout } = await importMainLayoutForRoute(
       "/terminal",
+      scrollContainer
+    );
+
+    MainLayout();
+
+    expect(scrollContainer.scrollTop).toBe(320);
+  });
+
+  it("keeps the file-transfer workspace route from touching the hidden page scroll container", async () => {
+    const scrollContainer = { scrollTop: 320 };
+    const { MainLayout } = await importMainLayoutForRoute(
+      "/file-transfer/conn-1",
       scrollContainer
     );
 

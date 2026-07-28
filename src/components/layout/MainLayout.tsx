@@ -4,6 +4,7 @@ import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalPage } from "@/pages/TerminalPage";
+import { FileTransferWorkspace } from "@/pages/FileTransferWorkspace";
 
 export function resetMainScrollContainer(
   container: { scrollTop: number } | null
@@ -15,13 +16,17 @@ export function resetMainScrollContainer(
 export function MainLayout() {
   const location = useLocation();
   const isTerminal = location.pathname === "/terminal";
+  const isFileTransfer =
+    location.pathname === "/file-transfer" ||
+    location.pathname.startsWith("/file-transfer/");
+  const isPersistentWorkspace = isTerminal || isFileTransfer;
   const mainScrollRef = useRef<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
-    if (!isTerminal) {
+    if (!isPersistentWorkspace) {
       resetMainScrollContainer(mainScrollRef.current);
     }
-  }, [isTerminal, location.pathname]);
+  }, [isPersistentWorkspace, location.pathname]);
 
   return (
     <TooltipProvider>
@@ -32,7 +37,7 @@ export function MainLayout() {
           <main
             ref={mainScrollRef}
             className="flex-1 overflow-auto overscroll-none bg-muted/30 p-6"
-            style={{ display: isTerminal ? "none" : undefined }}
+            style={{ display: isPersistentWorkspace ? "none" : undefined }}
           >
             <Outlet />
           </main>
@@ -44,6 +49,15 @@ export function MainLayout() {
             }
           >
             <TerminalPage />
+          </main>
+          <main
+            className={
+              isFileTransfer
+                ? "min-h-0 min-w-0 flex-1 overflow-hidden p-0"
+                : "hidden"
+            }
+          >
+            <FileTransferWorkspace />
           </main>
         </div>
       </div>
