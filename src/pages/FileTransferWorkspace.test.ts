@@ -60,6 +60,7 @@ describe("FileTransferTabBar", () => {
     expect(html).toContain("测试服务器");
     expect(html).toContain("返回列表");
     expect(html).toContain('aria-label="返回文件传输连接列表"');
+    expect(html.indexOf("返回列表")).toBeGreaterThan(html.indexOf("测试服务器"));
     expect(html).toContain('aria-label="关闭文件传输 conn-1"');
     expect(html).toContain("单击切换标签 · Shift+单击关闭");
   });

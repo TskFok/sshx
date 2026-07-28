@@ -30,18 +30,6 @@ export function FileTransferTabBar({
 }) {
   return (
     <div className="flex items-center border-b bg-background px-2">
-      {onReturnToList && activeConnectionId && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="mr-2 shrink-0"
-          aria-label="返回文件传输连接列表"
-          onClick={onReturnToList}
-        >
-          返回列表
-        </Button>
-      )}
       <div
         className="flex flex-1 items-center gap-1 overflow-x-auto overscroll-none py-1"
         role="tablist"
@@ -104,6 +92,18 @@ export function FileTransferTabBar({
           );
         })}
       </div>
+      {onReturnToList && activeConnectionId && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-2 shrink-0"
+          aria-label="返回文件传输连接列表"
+          onClick={onReturnToList}
+        >
+          返回列表
+        </Button>
+      )}
     </div>
   );
 }

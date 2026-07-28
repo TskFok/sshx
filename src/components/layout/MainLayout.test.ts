@@ -84,7 +84,7 @@ describe("MainLayout scroll restoration", () => {
     expect(scrollContainer.scrollTop).toBe(320);
   });
 
-  it("keeps the file-transfer workspace route from touching the hidden page scroll container", async () => {
+  it("进入文件传输连接详情时重置工作区滚动位置", async () => {
     const scrollContainer = { scrollTop: 320 };
     const { MainLayout } = await importMainLayoutForRoute(
       "/file-transfer/conn-1",
@@ -93,7 +93,7 @@ describe("MainLayout scroll restoration", () => {
 
     MainLayout();
 
-    expect(scrollContainer.scrollTop).toBe(320);
+    expect(scrollContainer.scrollTop).toBe(0);
   });
 
   it("uses the standard scrollable page container for the file-transfer workspace", async () => {
@@ -108,17 +108,14 @@ describe("MainLayout scroll restoration", () => {
     expect(className).toContain("p-6");
   });
 
-  it("仅在文件传输列表进入连接详情时重置工作区滚动位置", async () => {
+  it("进入任意文件传输连接详情时重置工作区滚动位置", async () => {
     const { shouldResetFileTransferScroll } = await importMainLayoutForRoute(
       "/file-transfer",
       { scrollTop: 0 }
     );
 
-    expect(
-      shouldResetFileTransferScroll("/file-transfer", "/file-transfer/conn-1")
-    ).toBe(true);
-    expect(
-      shouldResetFileTransferScroll("/file-transfer/conn-1", "/file-transfer/conn-2")
-    ).toBe(false);
+    expect(shouldResetFileTransferScroll("/file-transfer/conn-1")).toBe(true);
+    expect(shouldResetFileTransferScroll("/file-transfer/conn-2")).toBe(true);
+    expect(shouldResetFileTransferScroll("/file-transfer")).toBe(false);
   });
 });
