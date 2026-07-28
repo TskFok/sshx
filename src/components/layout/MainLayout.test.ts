@@ -107,4 +107,18 @@ describe("MainLayout scroll restoration", () => {
     expect(className).toContain("bg-muted/30");
     expect(className).toContain("p-6");
   });
+
+  it("仅在文件传输列表进入连接详情时重置工作区滚动位置", async () => {
+    const { shouldResetFileTransferScroll } = await importMainLayoutForRoute(
+      "/file-transfer",
+      { scrollTop: 0 }
+    );
+
+    expect(
+      shouldResetFileTransferScroll("/file-transfer", "/file-transfer/conn-1")
+    ).toBe(true);
+    expect(
+      shouldResetFileTransferScroll("/file-transfer/conn-1", "/file-transfer/conn-2")
+    ).toBe(false);
+  });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMatch, useNavigate } from "react-router-dom";
 import { Server, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { FileTransferPage } from "./FileTransferPage";
 import { getConnectionFileTransferPath } from "@/lib/connectionNavigation";
 import {
@@ -18,15 +19,29 @@ export function FileTransferTabBar({
   activeConnectionId,
   onSelect,
   onClose,
+  onReturnToList,
 }: {
   connections: ConnectionInfo[];
   openConnectionIds: string[];
   activeConnectionId: string | null;
   onSelect: (connectionId: string) => void;
   onClose: (connectionId: string) => void;
+  onReturnToList: (() => void) | null;
 }) {
   return (
     <div className="flex items-center border-b bg-background px-2">
+      {onReturnToList && activeConnectionId && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mr-2 shrink-0"
+          aria-label="返回文件传输连接列表"
+          onClick={onReturnToList}
+        >
+          返回列表
+        </Button>
+      )}
       <div
         className="flex flex-1 items-center gap-1 overflow-x-auto overscroll-none py-1"
         role="tablist"
@@ -145,6 +160,7 @@ export function FileTransferWorkspace() {
             navigate(getConnectionFileTransferPath(connectionId))
           }
           onClose={closeTab}
+          onReturnToList={() => navigate("/file-transfer")}
         />
       )}
       <div className="min-h-0 flex-1">

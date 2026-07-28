@@ -13,6 +13,16 @@ export function resetMainScrollContainer(
   container.scrollTop = 0;
 }
 
+export function shouldResetFileTransferScroll(
+  previousPathname: string | null,
+  pathname: string
+): boolean {
+  return (
+    previousPathname === "/file-transfer" &&
+    pathname.startsWith("/file-transfer/")
+  );
+}
+
 export function MainLayout() {
   const location = useLocation();
   const isTerminal = location.pathname === "/terminal";
@@ -21,11 +31,22 @@ export function MainLayout() {
     location.pathname.startsWith("/file-transfer/");
   const isPersistentWorkspace = isTerminal || isFileTransfer;
   const mainScrollRef = useRef<HTMLElement | null>(null);
+  const fileTransferScrollRef = useRef<HTMLElement | null>(null);
+  const previousPathnameRef = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     if (!isPersistentWorkspace) {
       resetMainScrollContainer(mainScrollRef.current);
     }
+    if (
+      shouldResetFileTransferScroll(
+        previousPathnameRef.current,
+        location.pathname
+      )
+    ) {
+      resetMainScrollContainer(fileTransferScrollRef.current);
+    }
+    previousPathnameRef.current = location.pathname;
   }, [isPersistentWorkspace, location.pathname]);
 
   return (
@@ -42,6 +63,7 @@ export function MainLayout() {
             <Outlet />
           </main>
           <main
+            ref={fileTransferScrollRef}
             className={
               isTerminal
                 ? "min-h-0 min-w-0 flex-1 overflow-hidden p-0"

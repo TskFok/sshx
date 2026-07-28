@@ -753,12 +753,6 @@ export function FileTransferPage({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <Button asChild variant="outline" size="sm" className="self-start">
-        <Link to="/file-transfer" aria-label="返回文件传输连接列表">
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          返回列表
-        </Link>
-      </Button>
       {connectionError && (
         <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <XCircle className="h-4 w-4 shrink-0" />

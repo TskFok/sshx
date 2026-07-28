@@ -114,12 +114,11 @@ describe("FileTransferPage", () => {
     expect(html).toContain("加载中");
   });
 
-  it("已选择连接时渲染返回文件传输连接列表按钮", () => {
+  it("不在详情内容区渲染返回文件传输连接列表按钮", () => {
     const html = renderFileTransferPage();
 
-    expect(html).toContain("返回列表");
-    expect(html).toContain('href="/file-transfer"');
-    expect(html).toContain('aria-label="返回文件传输连接列表"');
+    expect(html).not.toContain("返回列表");
+    expect(html).not.toContain('aria-label="返回文件传输连接列表"');
   });
 
   it("renders a connection picker when no connection is selected", () => {
