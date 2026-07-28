@@ -1,4 +1,4 @@
-import type React from "react";
+import { Children, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function importMainLayoutForRoute(
@@ -36,6 +36,16 @@ async function importMainLayoutForRoute(
   }));
 
   return import("./MainLayout");
+}
+
+function getWorkspaceMainClassName(layout: ReactElement): string {
+  const appShell = layout.props.children as ReactElement;
+  const contentColumn = Children.toArray(appShell.props.children)[1] as ReactElement;
+  const workspaceMain = Children.toArray(contentColumn.props.children).at(
+    -1
+  ) as ReactElement;
+
+  return workspaceMain.props.className as string;
 }
 
 describe("MainLayout scroll restoration", () => {
@@ -84,5 +94,17 @@ describe("MainLayout scroll restoration", () => {
     MainLayout();
 
     expect(scrollContainer.scrollTop).toBe(320);
+  });
+
+  it("uses the standard scrollable page container for the file-transfer workspace", async () => {
+    const { MainLayout } = await importMainLayoutForRoute("/file-transfer", {
+      scrollTop: 0,
+    });
+
+    const className = getWorkspaceMainClassName(MainLayout() as ReactElement);
+
+    expect(className).toContain("overflow-auto");
+    expect(className).toContain("bg-muted/30");
+    expect(className).toContain("p-6");
   });
 });

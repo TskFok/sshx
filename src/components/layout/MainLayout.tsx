@@ -53,7 +53,7 @@ export function MainLayout() {
           <main
             className={
               isFileTransfer
-                ? "min-h-0 min-w-0 flex-1 overflow-hidden p-0"
+                ? "min-h-0 min-w-0 flex-1 overflow-auto overscroll-none bg-muted/30 p-6"
                 : "hidden"
             }
           >
