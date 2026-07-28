@@ -101,7 +101,6 @@ describe("FileTransferPage", () => {
     const html = renderFileTransferPage();
 
     expect(html).not.toContain("返回连接");
-    expect(html).not.toContain("文件传输");
     expect(html).not.toContain("生产服务器");
     expect(html).not.toContain("alice@example.com:22");
     expect(html).not.toContain("连接中");
@@ -113,6 +112,14 @@ describe("FileTransferPage", () => {
     expect(html).toContain("本地文件");
     expect(html).toContain("远程文件");
     expect(html).toContain("加载中");
+  });
+
+  it("已选择连接时渲染返回文件传输连接列表按钮", () => {
+    const html = renderFileTransferPage();
+
+    expect(html).toContain("返回列表");
+    expect(html).toContain('href="/file-transfer"');
+    expect(html).toContain('aria-label="返回文件传输连接列表"');
   });
 
   it("renders a connection picker when no connection is selected", () => {
