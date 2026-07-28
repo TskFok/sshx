@@ -50,7 +50,6 @@ export function MainLayout() {
             <Outlet />
           </main>
           <main
-            ref={fileTransferScrollRef}
             className={
               isTerminal
                 ? "min-h-0 min-w-0 flex-1 overflow-hidden p-0"
@@ -60,6 +59,7 @@ export function MainLayout() {
             <TerminalPage />
           </main>
           <main
+            ref={fileTransferScrollRef}
             className={
               isFileTransfer
                 ? "min-h-0 min-w-0 flex-1 overflow-auto overscroll-none bg-muted/30 p-6"

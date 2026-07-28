@@ -1,18 +1,28 @@
 import { Children, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type ScrollRef = {
+  current: { scrollTop: number };
+};
+
 async function importMainLayoutForRoute(
   pathname: string,
-  scrollContainer: { scrollTop: number }
+  mainScrollRef: ScrollRef,
+  fileTransferScrollRef: ScrollRef
 ) {
   vi.resetModules();
   vi.doMock("react", async () => {
     const actual = await vi.importActual<typeof import("react")>("react");
+    const refs = [mainScrollRef, fileTransferScrollRef];
 
     return {
       ...actual,
       useLayoutEffect: (effect: () => void) => effect(),
-      useRef: () => ({ current: scrollContainer }),
+      useRef: () => {
+        const ref = refs.shift();
+        if (!ref) throw new Error("Unexpected useRef call");
+        return ref;
+      },
     };
   });
   vi.doMock("react-router-dom", () => ({
@@ -38,14 +48,22 @@ async function importMainLayoutForRoute(
   return import("./MainLayout");
 }
 
-function getWorkspaceMainClassName(layout: ReactElement): string {
+function getPersistentWorkspaceMains(layout: ReactElement): {
+  terminalMain: ReactElement;
+  workspaceMain: ReactElement;
+} {
   const appShell = layout.props.children as ReactElement;
   const contentColumn = Children.toArray(appShell.props.children)[1] as ReactElement;
-  const workspaceMain = Children.toArray(contentColumn.props.children).at(
-    -1
-  ) as ReactElement;
+  const contentChildren = Children.toArray(contentColumn.props.children);
 
-  return workspaceMain.props.className as string;
+  return {
+    terminalMain: contentChildren.at(-2) as ReactElement,
+    workspaceMain: contentChildren.at(-1) as ReactElement,
+  };
+}
+
+function getElementRef(element: ReactElement): unknown {
+  return (element as ReactElement & { ref?: unknown }).ref;
 }
 
 describe("MainLayout scroll restoration", () => {
@@ -64,7 +82,8 @@ describe("MainLayout scroll restoration", () => {
     const scrollContainer = { scrollTop: 320 };
     const { MainLayout } = await importMainLayoutForRoute(
       "/connections",
-      scrollContainer
+      { current: scrollContainer },
+      { current: { scrollTop: 0 } }
     );
 
     MainLayout();
@@ -76,7 +95,8 @@ describe("MainLayout scroll restoration", () => {
     const scrollContainer = { scrollTop: 320 };
     const { MainLayout } = await importMainLayoutForRoute(
       "/terminal",
-      scrollContainer
+      { current: scrollContainer },
+      { current: { scrollTop: 0 } }
     );
 
     MainLayout();
@@ -84,24 +104,37 @@ describe("MainLayout scroll restoration", () => {
     expect(scrollContainer.scrollTop).toBe(320);
   });
 
-  it("进入文件传输连接详情时重置工作区滚动位置", async () => {
-    const scrollContainer = { scrollTop: 320 };
+  it("进入文件传输连接详情时重置文件传输工作区的滚动位置", async () => {
+    const mainScrollContainer = { scrollTop: 320 };
+    const fileTransferContainer = { scrollTop: 320 };
+    const fileTransferScrollRef = { current: fileTransferContainer };
     const { MainLayout } = await importMainLayoutForRoute(
       "/file-transfer/conn-1",
-      scrollContainer
+      { current: mainScrollContainer },
+      fileTransferScrollRef
     );
 
-    MainLayout();
+    const { terminalMain, workspaceMain } = getPersistentWorkspaceMains(
+      MainLayout() as ReactElement
+    );
 
-    expect(scrollContainer.scrollTop).toBe(0);
+    expect(fileTransferContainer.scrollTop).toBe(0);
+    expect(mainScrollContainer.scrollTop).toBe(320);
+    expect(getElementRef(terminalMain)).toBeNull();
+    expect(getElementRef(workspaceMain)).toBe(fileTransferScrollRef);
   });
 
   it("uses the standard scrollable page container for the file-transfer workspace", async () => {
-    const { MainLayout } = await importMainLayoutForRoute("/file-transfer", {
-      scrollTop: 0,
-    });
+    const { MainLayout } = await importMainLayoutForRoute(
+      "/file-transfer",
+      { current: { scrollTop: 0 } },
+      { current: { scrollTop: 0 } }
+    );
 
-    const className = getWorkspaceMainClassName(MainLayout() as ReactElement);
+    const { workspaceMain } = getPersistentWorkspaceMains(
+      MainLayout() as ReactElement
+    );
+    const className = workspaceMain.props.className as string;
 
     expect(className).toContain("overflow-auto");
     expect(className).toContain("bg-muted/30");
@@ -111,7 +144,8 @@ describe("MainLayout scroll restoration", () => {
   it("进入任意文件传输连接详情时重置工作区滚动位置", async () => {
     const { shouldResetFileTransferScroll } = await importMainLayoutForRoute(
       "/file-transfer",
-      { scrollTop: 0 }
+      { current: { scrollTop: 0 } },
+      { current: { scrollTop: 0 } }
     );
 
     expect(shouldResetFileTransferScroll("/file-transfer/conn-1")).toBe(true);
