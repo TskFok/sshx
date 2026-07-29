@@ -176,6 +176,51 @@ describe("FileTransferPage", () => {
     expect(html).toContain("-rw-------");
   });
 
+  it("连接不可用时禁用远程文件面板交互", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(FilePanel, {
+        title: "远程文件",
+        icon: Server,
+        snapshot: {
+          cwd: "/home/alice",
+          entries: [
+            {
+              name: "secret.tar",
+              path: "/home/alice/secret.tar",
+              isDirectory: false,
+              size: 1024,
+              modifiedAt: null,
+              permissions: "-rw-------",
+            },
+          ],
+        },
+        loading: false,
+        selectedPaths: [],
+        pathValue: "/home/alice",
+        onPathChange: () => {},
+        onPathSubmit: () => {},
+        pathDisabled: true,
+        pathSubmitDisabled: true,
+        searchValue: "",
+        onSearchChange: () => {},
+        onSelect: () => {},
+        onRefresh: () => {},
+        onParent: () => {},
+        parentDisabled: false,
+        footer: null,
+        showPermissions: true,
+        interactionDisabled: true,
+      })
+    );
+
+    expect(html).toContain(
+      'aria-label="远程文件搜索当前目录" disabled=""'
+    );
+    expect(html).toContain(
+      'aria-label="选择文件 secret.tar" disabled=""'
+    );
+  });
+
   it("renders separate search inputs for local and remote panels", () => {
     const html = renderFileTransferPage();
 
@@ -231,5 +276,29 @@ describe("FileTransferPage", () => {
 
     expect(html).toContain("中断");
     expect(html).toContain('aria-label="中断传输 large.tar"');
+  });
+
+  it("连接不可用时禁用传输历史中的远程目录跳转", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(HistoryRow, {
+        name: "large.tar",
+        direction: "upload",
+        status: "failed",
+        localDir: "/tmp",
+        remoteDir: "/home/alice",
+        totalBytes: 1024,
+        progress: 25,
+        speedBps: 128,
+        durationMs: null,
+        errorMessage: "会话不存在或已断开",
+        onLocalDir: () => {},
+        onRemoteDir: () => {},
+        remoteDirDisabled: true,
+      })
+    );
+
+    expect(html).toMatch(
+      /<button[^>]*disabled=""[^>]*>远程：\/home\/alice<\/button>/
+    );
   });
 });

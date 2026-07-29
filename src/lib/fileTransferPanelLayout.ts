@@ -29,7 +29,7 @@ export function getFileTransferHistoryLayoutClasses() {
     fileSize: "shrink-0 text-xs text-muted-foreground",
     pathGrid: "mt-2 grid min-w-0 gap-1 text-xs text-muted-foreground lg:grid-cols-2",
     pathButton:
-      "block w-full min-w-0 truncate rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      "block w-full min-w-0 truncate rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
     error: "mt-1 min-w-0 break-all text-xs text-destructive",
     progress: "w-full min-w-0 shrink-0 lg:w-56",
     progressMeta:

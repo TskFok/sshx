@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canUseFileTransferSession,
   getFileTransferDisconnectMessage,
   isFileTransferSessionUnavailableError,
   loadReconnectRemoteDirectory,
@@ -192,5 +193,12 @@ describe("fileTransferConnection", () => {
         },
       })
     ).rejects.toThrow("无法读取 /home/alice");
+  });
+
+  it("只有已连接且存在 sessionId 时允许远程文件操作", () => {
+    expect(canUseFileTransferSession("connected", "session-1")).toBe(true);
+    expect(canUseFileTransferSession("connected", null)).toBe(false);
+    expect(canUseFileTransferSession("disconnected", "session-1")).toBe(false);
+    expect(canUseFileTransferSession("reconnecting", "session-1")).toBe(false);
   });
 });

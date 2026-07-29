@@ -40,5 +40,7 @@ describe("getFileTransferHistoryLayoutClasses", () => {
     expect(classes.pathButton).toContain("transition-colors");
     expect(classes.pathButton).toContain("hover:bg-muted");
     expect(classes.pathButton).toContain("focus-visible:ring-2");
+    expect(classes.pathButton).toContain("disabled:cursor-not-allowed");
+    expect(classes.pathButton).toContain("disabled:opacity-50");
   });
 });

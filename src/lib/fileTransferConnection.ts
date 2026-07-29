@@ -90,3 +90,10 @@ export async function loadReconnectRemoteDirectory<T>({
     value: await load(defaultPath),
   };
 }
+
+export function canUseFileTransferSession(
+  phase: FileTransferConnectionPhase,
+  sessionId: string | null
+): boolean {
+  return phase === "connected" && Boolean(sessionId);
+}

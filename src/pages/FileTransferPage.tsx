@@ -17,13 +17,19 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
+import { FileTransferConnectionAlert } from "@/components/file-transfer/FileTransferConnectionAlert";
 import { AuthPromptDialog, type AuthPromptData } from "@/components/ssh/AuthPromptDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useAppStore, type ConnectionGroup, type ConnectionInfo } from "@/store";
+import {
+  useAppStore,
+  type ConnectionGroup,
+  type ConnectionInfo,
+  type SshClosePayload,
+} from "@/store";
 import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
 import { getConnectionFileTransferPath } from "@/lib/connectionNavigation";
 import {
@@ -40,8 +46,14 @@ import {
   type TransferProgressPayload,
 } from "@/lib/fileTransfer";
 import {
+  canUseFileTransferSession,
+  getFileTransferDisconnectMessage,
+  isFileTransferSessionUnavailableError,
+  loadReconnectRemoteDirectory,
   shouldAcceptConnectionResult,
+  shouldHandleFileTransferSessionClose,
   shouldStartConnection,
+  type FileTransferConnectionPhase,
 } from "@/lib/fileTransferConnection";
 import {
   getFilePanelLayoutClasses,
@@ -161,6 +173,18 @@ export function FileTransferPage({
   const connectionAttemptRef = useRef(0);
   const pageDisposedRef = useRef(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionPhase, setConnectionPhase] =
+    useState<FileTransferConnectionPhase>("connecting");
+  const [reconnectRequest, setReconnectRequest] = useState<{
+    revision: number;
+    connectionId: string | null;
+    previousRemotePath: string | null;
+  }>({
+    revision: 0,
+    connectionId: null,
+    previousRemotePath: null,
+  });
+  const lastRemotePathRef = useRef<string | null>(null);
   const [localSnapshot, setLocalSnapshot] = useState<LocalDirSnapshot | null>(null);
   const [remoteSnapshot, setRemoteSnapshot] = useState<RemoteDirSnapshot | null>(null);
   const [localPathInput, setLocalPathInput] = useState("");
@@ -201,6 +225,10 @@ export function FileTransferPage({
     [remoteSnapshot?.entries, selectedRemotePaths]
   );
   const activeProgress = activeTransfer ? progressMap[activeTransfer.id] : null;
+  const remoteSessionReady = canUseFileTransferSession(
+    connectionPhase,
+    sessionId
+  );
 
   const handleLocalSearchChange = useCallback((value: string) => {
     setLocalSearch(value);
@@ -218,6 +246,12 @@ export function FileTransferPage({
 
   useEffect(() => {
     setRemotePathInput(remoteSnapshot?.cwd ?? "");
+  }, [remoteSnapshot?.cwd]);
+
+  useEffect(() => {
+    if (remoteSnapshot?.cwd) {
+      lastRemotePathRef.current = remoteSnapshot.cwd;
+    }
   }, [remoteSnapshot?.cwd]);
 
   const loadConnections = useCallback(async () => {
@@ -257,6 +291,45 @@ export function FileTransferPage({
     []
   );
 
+  const markSessionDisconnected = useCallback(
+    (message: string, expectedSessionId?: string) => {
+      if (
+        expectedSessionId &&
+        !shouldHandleFileTransferSessionClose(
+          sessionIdRef.current,
+          expectedSessionId
+        )
+      ) {
+        return;
+      }
+
+      const staleSessionId = sessionIdRef.current;
+      const transfer = activeTransferRef.current;
+      if (transfer) {
+        invoke("file_transfer_cancel", {
+          request: { transferId: transfer.id },
+        }).catch(() => {});
+      }
+      if (staleSessionId) {
+        invoke("ssh_disconnect", { sessionId: staleSessionId }).catch(() => {});
+      }
+
+      activeTransferRef.current = null;
+      sessionIdRef.current = null;
+      sessionConnectionIdRef.current = null;
+      setActiveTransfer(null);
+      setTransferBusy(false);
+      setCancelingTransferId(null);
+      setSessionId(null);
+      setRemoteLoading(false);
+      setAuthPrompt(null);
+      setAuthResponses([]);
+      setConnectionPhase("disconnected");
+      setConnectionError(message);
+    },
+    []
+  );
+
   const loadRemoteDirForSession = useCallback(
     async (targetSessionId: string, path: string, options?: { keepSearch?: boolean }) => {
       setRemoteLoading(true);
@@ -277,7 +350,13 @@ export function FileTransferPage({
         setSelectedRemotePaths([]);
       } catch (error) {
         if (sessionIdRef.current === targetSessionId) {
-          setConnectionError(typeof error === "string" ? error : String(error));
+          const message =
+            typeof error === "string" ? error : String(error);
+          if (isFileTransferSessionUnavailableError(error)) {
+            markSessionDisconnected(message, targetSessionId);
+          } else {
+            setConnectionError(message);
+          }
         }
       } finally {
         if (sessionIdRef.current === targetSessionId) {
@@ -285,7 +364,7 @@ export function FileTransferPage({
         }
       }
     },
-    []
+    [markSessionDisconnected]
   );
 
   const loadRemoteDir = useCallback(
@@ -347,6 +426,23 @@ export function FileTransferPage({
     setAuthPrompt(null);
     setAuthResponses([]);
   }, [authPrompt]);
+
+  const reconnectFileTransfer = useCallback(() => {
+    if (
+      !connectionId ||
+      connectionPhase === "reconnecting" ||
+      !connection
+    ) {
+      return;
+    }
+
+    setConnectionPhase("reconnecting");
+    setReconnectRequest((current) => ({
+      revision: current.revision + 1,
+      connectionId,
+      previousRemotePath: lastRemotePathRef.current,
+    }));
+  }, [connection?.id, connectionId, connectionPhase]);
 
   useEffect(() => {
     void loadConnections();
@@ -440,9 +536,19 @@ export function FileTransferPage({
       return;
     }
 
+    const isReconnectAttempt =
+      reconnectRequest.revision > 0 &&
+      reconnectRequest.connectionId === targetConnectionId;
+    const previousRemotePath = isReconnectAttempt
+      ? reconnectRequest.previousRemotePath
+      : null;
+
+    setConnectionPhase(isReconnectAttempt ? "reconnecting" : "connecting");
     connectionAttemptRef.current += 1;
     const attemptId = connectionAttemptRef.current;
     let unlistenPrompt: UnlistenFn | null = null;
+    let unlistenClose: UnlistenFn | null = null;
+    let returnedSessionId: string | null = null;
     const activeSessionId = sessionIdRef.current;
     const activeTransfer = activeTransferRef.current;
     pendingConnectionIdRef.current = targetConnectionId;
@@ -463,12 +569,15 @@ export function FileTransferPage({
       setSessionId(null);
     }
 
-    setRemoteSnapshot(null);
+    if (!isReconnectAttempt) {
+      setRemoteSnapshot(null);
+      setRemoteSearch("");
+      setConnectionError(null);
+      lastRemotePathRef.current = null;
+    }
     setSelectedRemotePaths([]);
-    setRemoteSearch("");
     setAuthPrompt(null);
     setAuthResponses([]);
-    setConnectionError(null);
 
     const isCurrentAttempt = () =>
       !pageDisposedRef.current &&
@@ -490,6 +599,7 @@ export function FileTransferPage({
             rows: 24,
           },
         });
+        returnedSessionId = returned;
         if (
           !shouldAcceptConnectionResult({
             pageDisposed: pageDisposedRef.current,
@@ -504,6 +614,39 @@ export function FileTransferPage({
         sessionIdRef.current = returned;
         sessionConnectionIdRef.current = targetConnectionId;
         setSessionId(returned);
+
+        unlistenClose = await listen<SshClosePayload>(
+          `ssh-close-${returned}`,
+          (event) => {
+            if (
+              !shouldAcceptConnectionResult({
+                pageDisposed: pageDisposedRef.current,
+                returnedSessionId: returned,
+                attemptId,
+                currentAttemptId: connectionAttemptRef.current,
+              }) ||
+              !shouldHandleFileTransferSessionClose(
+                sessionIdRef.current,
+                returned
+              )
+            ) {
+              return;
+            }
+            connectionAttemptRef.current += 1;
+            pendingConnectionIdRef.current = null;
+            markSessionDisconnected(
+              getFileTransferDisconnectMessage(event.payload?.reason),
+              returned
+            );
+          }
+        );
+        if (!isCurrentAttempt() || sessionIdRef.current !== returned) {
+          unlistenClose?.();
+          unlistenClose = null;
+          await invoke("ssh_disconnect", { sessionId: returned });
+          return;
+        }
+
         const cwd = await invoke<string>("sftp_get_remote_pwd", {
           request: { sessionId: returned },
         });
@@ -519,11 +662,44 @@ export function FileTransferPage({
           await invoke("ssh_disconnect", { sessionId: returned });
           return;
         }
+
+        setRemoteLoading(true);
+        const restored = await loadReconnectRemoteDirectory({
+          previousPath: previousRemotePath,
+          defaultPath: cwd,
+          load: (path) =>
+            invoke<RemoteDirSnapshot>("file_transfer_list_remote_dir", {
+              request: { sessionId: returned, path },
+            }),
+        });
+        if (!isCurrentAttempt() || sessionIdRef.current !== returned) {
+          await invoke("ssh_disconnect", { sessionId: returned });
+          return;
+        }
+
+        lastRemotePathRef.current = restored.path;
+        setRemoteSnapshot(restored.value);
+        setSelectedRemotePaths([]);
+        setConnectionError(null);
+        setConnectionPhase("connected");
+        setRemoteLoading(false);
         pendingConnectionIdRef.current = null;
-        await loadRemoteDirForSession(returned, cwd);
       } catch (error) {
+        unlistenClose?.();
+        unlistenClose = null;
         if (isCurrentAttempt()) {
-          setConnectionError(typeof error === "string" ? error : String(error));
+          const message =
+            typeof error === "string" ? error : String(error);
+          setRemoteLoading(false);
+          if (
+            returnedSessionId &&
+            sessionIdRef.current === returnedSessionId
+          ) {
+            markSessionDisconnected(message, returnedSessionId);
+          } else {
+            setConnectionPhase("disconnected");
+            setConnectionError(message);
+          }
         }
       } finally {
         if (isCurrentAttempt()) {
@@ -540,6 +716,7 @@ export function FileTransferPage({
         pendingConnectionIdRef.current = null;
       }
       unlistenPrompt?.();
+      unlistenClose?.();
 
       const cleanupTransfer = activeTransferRef.current;
       if (cleanupTransfer) {
@@ -563,10 +740,24 @@ export function FileTransferPage({
         setSessionId(null);
       }
     };
-  }, [connectionId, connection?.id, setupAuthPromptListener, loadRemoteDirForSession]);
+  }, [
+    connectionId,
+    connection?.id,
+    markSessionDisconnected,
+    reconnectRequest.connectionId,
+    reconnectRequest.previousRemotePath,
+    reconnectRequest.revision,
+    setupAuthPromptListener,
+  ]);
 
   const uploadSelected = async () => {
-    if (selectedLocalFiles.length === 0 || !remoteSnapshot || !sessionId || !connectionId) {
+    if (
+      selectedLocalFiles.length === 0 ||
+      !remoteSnapshot ||
+      !remoteSessionReady ||
+      !sessionId ||
+      !connectionId
+    ) {
       return;
     }
     setTransferBusy(true);
@@ -619,6 +810,11 @@ export function FileTransferPage({
             wasCancelled = true;
             break;
           }
+          if (isFileTransferSessionUnavailableError(error)) {
+            wasCancelled = true;
+            markSessionDisconnected(message, sessionId);
+            break;
+          }
           setConnectionError(message);
         }
       }
@@ -636,7 +832,13 @@ export function FileTransferPage({
   };
 
   const downloadSelected = async () => {
-    if (selectedRemoteFiles.length === 0 || !localSnapshot || !sessionId || !connectionId) {
+    if (
+      selectedRemoteFiles.length === 0 ||
+      !localSnapshot ||
+      !remoteSessionReady ||
+      !sessionId ||
+      !connectionId
+    ) {
       return;
     }
     setTransferBusy(true);
@@ -689,6 +891,11 @@ export function FileTransferPage({
             wasCancelled = true;
             break;
           }
+          if (isFileTransferSessionUnavailableError(error)) {
+            wasCancelled = true;
+            markSessionDisconnected(message, sessionId);
+            break;
+          }
           setConnectionError(message);
         }
       }
@@ -718,9 +925,17 @@ export function FileTransferPage({
       });
     } catch (error) {
       setCancelingTransferId(null);
-      setConnectionError(typeof error === "string" ? error : String(error));
+      const message = typeof error === "string" ? error : String(error);
+      if (isFileTransferSessionUnavailableError(error)) {
+        markSessionDisconnected(
+          message,
+          sessionIdRef.current ?? undefined
+        );
+      } else {
+        setConnectionError(message);
+      }
     }
-  }, [cancelingTransferId]);
+  }, [cancelingTransferId, markSessionDisconnected]);
 
   const jumpToLocalPath = useCallback(async () => {
     await loadLocalDir(localPathInput.trim() || null);
@@ -754,10 +969,11 @@ export function FileTransferPage({
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       {connectionError && (
-        <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <XCircle className="h-4 w-4 shrink-0" />
-          <span className="break-all">{connectionError}</span>
-        </div>
+        <FileTransferConnectionAlert
+          message={connectionError}
+          phase={connectionPhase}
+          onReconnect={reconnectFileTransfer}
+        />
       )}
 
       <div className={layoutClasses.grid}>
@@ -795,7 +1011,11 @@ export function FileTransferPage({
               <Button
                 size="sm"
                 className={layoutClasses.footerActionButton}
-                disabled={selectedLocalFiles.length === 0 || transferBusy || !sessionId}
+                disabled={
+                  selectedLocalFiles.length === 0 ||
+                  transferBusy ||
+                  !remoteSessionReady
+                }
                 onClick={() => void uploadSelected()}
               >
                 <Upload className="mr-2 h-4 w-4" />
@@ -810,13 +1030,21 @@ export function FileTransferPage({
           icon={Server}
           snapshot={remoteSnapshot}
           showPermissions
-          loading={remoteLoading || (!sessionId && !connectionError)}
+          loading={
+            (remoteLoading && connectionPhase !== "reconnecting") ||
+            (connectionPhase === "connecting" && !connectionError)
+          }
+          interactionDisabled={!remoteSessionReady}
           selectedPaths={selectedRemotePaths}
           pathValue={remotePathInput}
           onPathChange={setRemotePathInput}
           onPathSubmit={() => void jumpToRemotePath()}
-          pathDisabled={remoteLoading || !sessionId}
-          pathSubmitDisabled={remoteLoading || !sessionId || !remotePathInput.trim()}
+          pathDisabled={remoteLoading || !remoteSessionReady}
+          pathSubmitDisabled={
+            remoteLoading ||
+            !remoteSessionReady ||
+            !remotePathInput.trim()
+          }
           searchValue={remoteSearch}
           onSearchChange={handleRemoteSearchChange}
           onSelect={(entry) => {
@@ -830,13 +1058,21 @@ export function FileTransferPage({
             const parent = remoteSnapshot ? remoteParent(remoteSnapshot.cwd) : null;
             if (parent) void loadRemoteDir(parent);
           }}
-          parentDisabled={!remoteSnapshot || !remoteParent(remoteSnapshot.cwd)}
+          parentDisabled={
+            !remoteSessionReady ||
+            !remoteSnapshot ||
+            !remoteParent(remoteSnapshot.cwd)
+          }
           footer={
             <div className={layoutClasses.footerActions}>
               <Button
                 size="sm"
                 className={layoutClasses.footerActionButton}
-                disabled={selectedRemoteFiles.length === 0 || transferBusy || !sessionId}
+                disabled={
+                  selectedRemoteFiles.length === 0 ||
+                  transferBusy ||
+                  !remoteSessionReady
+                }
                 onClick={() => void downloadSelected()}
               >
                 <Download className="mr-2 h-4 w-4" />
@@ -881,6 +1117,7 @@ export function FileTransferPage({
                   errorMessage={activeProgress?.message ?? null}
                   onLocalDir={() => void loadLocalDir(activeTransfer.localDir)}
                   onRemoteDir={() => void loadRemoteDir(activeTransfer.remoteDir)}
+                  remoteDirDisabled={!remoteSessionReady}
                   onCancelTransfer={() => void cancelActiveTransfer()}
                   cancelDisabled={cancelingTransferId === activeTransfer.id}
                 />
@@ -909,6 +1146,7 @@ export function FileTransferPage({
                   errorMessage={item.errorMessage ?? null}
                   onLocalDir={() => void loadLocalDir(item.localDir)}
                   onRemoteDir={() => void loadRemoteDir(item.remoteDir)}
+                  remoteDirDisabled={!remoteSessionReady}
                 />
               ))}
             </div>
@@ -1045,6 +1283,7 @@ export function FilePanel({
   snapshot,
   showPermissions = false,
   loading,
+  interactionDisabled = false,
   selectedPaths,
   pathValue,
   onPathChange,
@@ -1064,6 +1303,7 @@ export function FilePanel({
   snapshot: LocalDirSnapshot | RemoteDirSnapshot | null;
   showPermissions?: boolean;
   loading: boolean;
+  interactionDisabled?: boolean;
   selectedPaths: string[];
   pathValue: string;
   onPathChange: (value: string) => void;
@@ -1099,7 +1339,7 @@ export function FilePanel({
               className="h-8 w-8"
               aria-label={`${title} 返回上级目录`}
               title="返回上级目录"
-              disabled={parentDisabled || loading}
+              disabled={interactionDisabled || parentDisabled || loading}
               onClick={onParent}
             >
               <ArrowLeft className="h-4 w-4" />
@@ -1110,7 +1350,7 @@ export function FilePanel({
               className="h-8 w-8"
               aria-label={`${title} 刷新`}
               title="刷新"
-              disabled={loading || !snapshot}
+              disabled={interactionDisabled || loading || !snapshot}
               onClick={onRefresh}
             >
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
@@ -1156,7 +1396,7 @@ export function FilePanel({
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder={`搜索${title}当前目录`}
             aria-label={`${title}搜索当前目录`}
-            disabled={loading || !snapshot}
+            disabled={interactionDisabled || loading || !snapshot}
           />
         </div>
       </CardHeader>
@@ -1188,9 +1428,13 @@ export function FilePanel({
                   key={entry.path}
                   type="button"
                   className={cn(
-                    "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
+                    "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
                     selectedPaths.includes(entry.path) && "bg-primary/10 text-primary"
                   )}
+                  aria-label={`${
+                    entry.isDirectory ? "打开目录" : "选择文件"
+                  } ${entry.name}`}
+                  disabled={interactionDisabled}
                   onClick={() => onSelect(entry)}
                 >
                   {entry.isDirectory ? (
@@ -1238,6 +1482,7 @@ export function HistoryRow({
   errorMessage,
   onLocalDir,
   onRemoteDir,
+  remoteDirDisabled = false,
   onCancelTransfer,
   cancelDisabled = false,
 }: {
@@ -1253,6 +1498,7 @@ export function HistoryRow({
   errorMessage: string | null;
   onLocalDir: () => void;
   onRemoteDir: () => void;
+  remoteDirDisabled?: boolean;
   onCancelTransfer?: () => void;
   cancelDisabled?: boolean;
 }) {
@@ -1302,6 +1548,7 @@ export function HistoryRow({
               type="button"
               className={historyLayoutClasses.pathButton}
               title={remoteDir}
+              disabled={remoteDirDisabled}
               onClick={onRemoteDir}
             >
               远程：{remoteDir}
