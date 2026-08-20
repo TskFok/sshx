@@ -22,7 +22,16 @@ describe("依赖兼容性", () => {
     );
 
     expect(overrides).toHaveLength(5);
-    expect(overrides).toEqual(Array(5).fill(">=7.18.0 <8.0.0"));
+    expect(overrides).toEqual(Array(5).fill(">=7.18.2 <8.0.0"));
+  });
+
+  it("将 nanoid 安全覆盖限制在修补后的 3.x", () => {
+    const workspace = readFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "utf8");
+    const overrides = [...workspace.matchAll(/^\s*nanoid@[^:]+:\s*'([^']+)'$/gm)].map(
+      ([, version]) => version,
+    );
+
+    expect(overrides).toEqual([">=3.3.18 <4.0.0"]);
   });
 });
 
