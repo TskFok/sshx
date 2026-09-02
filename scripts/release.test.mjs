@@ -33,6 +33,24 @@ describe("依赖兼容性", () => {
 
     expect(overrides).toEqual([">=3.3.18 <4.0.0"]);
   });
+
+  it("将 browserslist 安全覆盖限制在修补后的 4.x", () => {
+    const workspace = readFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "utf8");
+    const overrides = [...workspace.matchAll(/^\s*browserslist@[^:]+:\s*'([^']+)'$/gm)].map(
+      ([, version]) => version,
+    );
+
+    expect(overrides).toEqual([">=4.28.7 <5.0.0"]);
+  });
+
+  it("将 postcss-selector-parser 安全覆盖限制在修补后的 6.x", () => {
+    const workspace = readFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "utf8");
+    const overrides = [
+      ...workspace.matchAll(/^\s*postcss-selector-parser@[^:]+:\s*'([^']+)'$/gm),
+    ].map(([, version]) => version);
+
+    expect(overrides).toEqual([">=6.1.3 <7.0.0"]);
+  });
 });
 
 describe("发布参数", () => {
