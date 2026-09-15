@@ -51,6 +51,8 @@ pub fn run() {
             ssh_commands::ssh_disconnect,
             ssh_commands::ssh_write,
             ssh_commands::ssh_resize,
+            ssh_commands::ssh_output_ready,
+            ssh_commands::ssh_ack_output,
             ssh_commands::ssh_auth_respond,
             ssh_commands::ssh_auth_cancel,
             ssh_commands::test_connection,

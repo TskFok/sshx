@@ -1,6 +1,6 @@
 //! macOS：使用系统 `/usr/bin/ssh` 与子进程 PTY，替代 russh 协议栈。
 
-use super::{SessionCmd, TRANSFER_CANCELLED_MESSAGE};
+use super::{OutputFlow, SessionCmd, TRANSFER_CANCELLED_MESSAGE, SSH_OUTPUT_CHUNK_BYTES};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::AuthMethod;
@@ -24,6 +24,7 @@ type ProgressProbe = Box<dyn FnMut() -> Option<u64> + Send>;
 pub struct SshSession {
     pub id: String,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
+    output_flow: Arc<OutputFlow>,
     child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
     /// OpenSSH 多路复用控制套接字（用于 `sftp` 复用已认证连接）。
     control_path: String,
@@ -48,7 +49,16 @@ impl SshSession {
             .map_err(|_| "session closed".to_string())
     }
 
+    pub fn ready_output(&self) {
+        self.output_flow.ready();
+    }
+
+    pub fn ack_output(&self, bytes: usize) {
+        self.output_flow.ack(bytes);
+    }
+
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.output_flow.close();
         if let Some(mut ch) = self.child.lock().ok().and_then(|mut g| g.take()) {
             let _ = ch.kill();
         }
@@ -62,6 +72,7 @@ impl SshSession {
         Self {
             id: id.to_string(),
             cmd_tx,
+            output_flow: Arc::new(OutputFlow::new(false)),
             child: Arc::new(Mutex::new(None)),
             control_path: format!("/tmp/sshx-test-control-{id}"),
             sftp_prefix_args: Vec::new(),
@@ -353,6 +364,7 @@ pub async fn connect_openssh(
     rows: u32,
     keepalive_interval_secs: u32,
     keepalive_max: u32,
+    output_flow_control: bool,
 ) -> Result<SshSession, String> {
     let log_path = temp_log_path()?;
     record_event(
@@ -385,7 +397,7 @@ pub async fn connect_openssh(
     let writer = Arc::new(Mutex::new(writer));
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(master));
 
-    let (pty_tx, mut pty_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (pty_tx, mut pty_rx) = mpsc::channel::<Vec<u8>>(16);
     run_pty_reader_thread(reader, pty_tx);
 
     let mut auth_rx = auth_prompts.register(session_id).await;
@@ -425,6 +437,8 @@ pub async fn connect_openssh(
 
     let sid = session_id.to_string();
     let app_emit = app.clone();
+    let output_flow = Arc::new(OutputFlow::new(output_flow_control));
+    let output_flow_loop = output_flow.clone();
     let writer_loop = writer.clone();
     let master_loop = master.clone();
 
@@ -462,9 +476,16 @@ pub async fn connect_openssh(
     });
 
     tokio::spawn(async move {
+        if !output_flow_loop.reserve(0).await {
+            return;
+        }
         while let Some(chunk) = pty_rx.recv().await {
+            if !output_flow_loop.reserve(chunk.len()).await {
+                return;
+            }
             let _ = app_emit.emit(&format!("ssh-data-{sid}"), chunk);
         }
+        output_flow_loop.close();
         record_event(
             Some(&app_emit),
             "ssh_session",
@@ -481,6 +502,7 @@ pub async fn connect_openssh(
     Ok(SshSession {
         id: session_id.to_string(),
         cmd_tx,
+        output_flow,
         child,
         control_path,
         sftp_prefix_args,
@@ -524,7 +546,7 @@ pub async fn connect_openssh_test(
     let child = Arc::new(Mutex::new(Some(child)));
     let writer = Arc::new(Mutex::new(writer));
 
-    let (pty_tx, mut pty_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (pty_tx, mut pty_rx) = mpsc::channel::<Vec<u8>>(16);
     run_pty_reader_thread(reader, pty_tx);
 
     let mut auth_rx = auth_prompts.register(session_id).await;
@@ -1047,14 +1069,14 @@ async fn spawn_ssh_pty(
     .map_err(|e| e.to_string())?
 }
 
-fn run_pty_reader_thread(mut reader: Box<dyn Read + Send>, out: mpsc::UnboundedSender<Vec<u8>>) {
+fn run_pty_reader_thread(mut reader: Box<dyn Read + Send>, out: mpsc::Sender<Vec<u8>>) {
     std::thread::spawn(move || {
-        let mut buf = [0u8; 16384];
+        let mut buf = [0u8; SSH_OUTPUT_CHUNK_BYTES];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if out.send(buf[..n].to_vec()).is_err() {
+                    if out.blocking_send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
@@ -1084,7 +1106,7 @@ async fn run_auth_until_ready(
     auth: &AuthMethod,
     key_passphrase: Option<&str>,
     log_path: &str,
-    pty_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+    pty_rx: &mut mpsc::Receiver<Vec<u8>>,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     child: Option<Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>>,
 ) -> Result<bool, String> {
@@ -1511,6 +1533,66 @@ fn clear_mfa_window(scan: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    struct TrackedReader {
+        data: Arc<Vec<u8>>,
+        offset: Arc<AtomicUsize>,
+    }
+
+    impl Read for TrackedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let start = self.offset.load(Ordering::SeqCst);
+            if start == self.data.len() {
+                return Ok(0);
+            }
+            let end = (start + buf.len()).min(self.data.len());
+            buf[..end - start].copy_from_slice(&self.data[start..end]);
+            self.offset.store(end, Ordering::SeqCst);
+            Ok(end - start)
+        }
+    }
+
+    #[tokio::test]
+    async fn pty_reader_applies_backpressure_and_preserves_byte_order() {
+        let input = Arc::new(
+            (0..SSH_OUTPUT_CHUNK_BYTES * 64)
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>(),
+        );
+        let offset = Arc::new(AtomicUsize::new(0));
+        let reader = TrackedReader {
+            data: input.clone(),
+            offset: offset.clone(),
+        };
+        let (tx, mut rx) = mpsc::channel(16);
+
+        run_pty_reader_thread(Box::new(reader), tx);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while offset.load(Ordering::SeqCst) < SSH_OUTPUT_CHUNK_BYTES * 17 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("PTY 读取线程应填满队列并阻塞在下一块");
+        assert_eq!(
+            offset.load(Ordering::SeqCst),
+            SSH_OUTPUT_CHUNK_BYTES * 17,
+            "消费者暂停时不应读尽整个输入"
+        );
+
+        let mut output = Vec::with_capacity(input.len());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(chunk) = rx.recv().await {
+                output.extend_from_slice(&chunk);
+            }
+        })
+        .await
+        .expect("恢复消费后读取线程应结束");
+
+        assert_eq!(output.as_slice(), input.as_slice());
+    }
 
     #[test]
     fn build_ssh_args_password_and_keepalive() {

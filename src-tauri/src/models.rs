@@ -262,6 +262,31 @@ pub struct SshConnectRequest {
     pub session_id: String,
     pub cols: u32,
     pub rows: u32,
+    #[serde(default)]
+    pub output_flow_control: bool,
+}
+
+#[cfg(test)]
+mod ssh_connect_request_tests {
+    use super::SshConnectRequest;
+
+    #[test]
+    fn output_flow_control_defaults_to_disabled_for_existing_callers() {
+        let json = r#"{"connectionId":"c","sessionId":"s","cols":80,"rows":24}"#;
+
+        let request: SshConnectRequest = serde_json::from_str(json).unwrap();
+
+        assert!(!request.output_flow_control);
+    }
+
+    #[test]
+    fn output_flow_control_reads_camel_case_true() {
+        let json = r#"{"connectionId":"c","sessionId":"s","cols":80,"rows":24,"outputFlowControl":true}"#;
+
+        let request: SshConnectRequest = serde_json::from_str(json).unwrap();
+
+        assert!(request.output_flow_control);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

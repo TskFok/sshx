@@ -71,6 +71,7 @@ import {
   TERMINAL_CONNECTION_PICKER_SCROLL_CLASS,
 } from "@/lib/terminalConnectionPicker";
 import { resolveWindowsTerminalClipboardKeyAction } from "@/lib/windowsTerminalClipboard";
+import { attachTerminalOutput } from "@/lib/terminalOutput";
 import { cn } from "@/lib/utils";
 
 interface AppSettingsPayload {
@@ -96,8 +97,8 @@ interface TerminalInstance {
   sessionId: string;
   disconnected: boolean;
   reconnecting: boolean;
-  unlistenData: (() => void) | null;
-  unlistenClose: (() => void) | null;
+  unlistenOutput: UnlistenFn | null;
+  disposed: boolean;
 }
 
 interface RemoteFileEntry {
@@ -491,14 +492,38 @@ export function TerminalPage() {
     setAuthResponses([]);
   }, [authPrompt]);
 
+  const setupSessionOutput = useCallback(
+    (inst: TerminalInstance, sessionId: string) => attachTerminalOutput(
+      inst.terminal,
+      sessionId,
+      (payload) => {
+        if (inst.disposed) return;
+        inst.disconnected = true;
+        inst.reconnecting = false;
+        writeRemoteClosedNotice(inst.terminal, payload);
+        inst.terminal.write("\x1b[33m按回车键重新连接...\x1b[0m\r\n");
+        triggerUpdate();
+      },
+      (error) => {
+        void invoke("ssh_disconnect", { sessionId }).catch(() => {});
+        if (inst.disposed) return;
+        inst.disconnected = true;
+        inst.reconnecting = false;
+        inst.terminal.write(`\r\n\x1b[31m--- 终端输出失败: ${error} ---\x1b[0m\r\n`);
+        inst.terminal.write("\x1b[33m按回车键重新连接...\x1b[0m\r\n");
+        triggerUpdate();
+      },
+    ),
+    [triggerUpdate],
+  );
+
   const doReconnect = useCallback(
     async (inst: TerminalInstance) => {
-      if (inst.reconnecting) return;
+      if (inst.reconnecting || inst.disposed) return;
       inst.reconnecting = true;
       triggerUpdate();
 
-      inst.unlistenData?.();
-      inst.unlistenClose?.();
+      inst.unlistenOutput?.();
 
       inst.terminal.write(
         "\r\n\x1b[33m--- 正在重新连接... ---\x1b[0m\r\n"
@@ -525,35 +550,27 @@ export function TerminalPage() {
             sessionId: newSessionId,
             cols: inst.terminal.cols,
             rows: inst.terminal.rows,
+            outputFlowControl: true,
           },
         });
 
         inst.sessionId = returnedId;
-
-        inst.unlistenData = await listen<number[]>(
-          `ssh-data-${returnedId}`,
-          (event) => {
-            inst.terminal.write(new Uint8Array(event.payload));
-          }
-        );
-
-        inst.unlistenClose = await listen<SshClosePayload>(
-          `ssh-close-${returnedId}`,
-          (event) => {
-            inst.disconnected = true;
-            inst.reconnecting = false;
-            writeRemoteClosedNotice(inst.terminal, event.payload);
-            inst.terminal.write(
-              "\x1b[33m按回车键重新连接...\x1b[0m\r\n"
-            );
-            triggerUpdate();
-          }
-        );
-
+        if (inst.disposed) {
+          await invoke("ssh_disconnect", { sessionId: returnedId });
+          return;
+        }
         inst.disconnected = false;
         inst.reconnecting = false;
+        inst.unlistenOutput = await setupSessionOutput(inst, returnedId);
+        if (inst.disposed) {
+          inst.unlistenOutput();
+          await invoke("ssh_disconnect", { sessionId: returnedId });
+          return;
+        }
         triggerUpdate();
       } catch (err) {
+        void invoke("ssh_disconnect", { sessionId: newSessionId }).catch(() => {});
+        if (inst.disposed) return;
         inst.reconnecting = false;
         inst.disconnected = true;
         inst.terminal.write(
@@ -565,7 +582,7 @@ export function TerminalPage() {
         unlistenPrompt?.();
       }
     },
-    [triggerUpdate, setupAuthPromptListener]
+    [triggerUpdate, setupAuthPromptListener, setupSessionOutput]
   );
 
   const doReconnectRef = useRef(doReconnect);
@@ -647,8 +664,8 @@ export function TerminalPage() {
           sessionId,
           disconnected: true,
           reconnecting: false,
-          unlistenData: null,
-          unlistenClose: null,
+          unlistenOutput: null,
+          disposed: false,
         };
 
         term.onData((data) => {
@@ -702,31 +719,26 @@ export function TerminalPage() {
               sessionId,
               cols: term.cols,
               rows: term.rows,
+              outputFlowControl: true,
             },
           });
 
           inst.sessionId = returnedId;
+          if (inst.disposed) {
+            await invoke("ssh_disconnect", { sessionId: returnedId });
+            return;
+          }
           inst.disconnected = false;
-
-          inst.unlistenData = await listen<number[]>(
-            `ssh-data-${returnedId}`,
-            (event) => {
-              term.write(new Uint8Array(event.payload));
-            }
-          );
-
-          inst.unlistenClose = await listen<SshClosePayload>(
-            `ssh-close-${returnedId}`,
-            (event) => {
-              inst.disconnected = true;
-              writeRemoteClosedNotice(term, event.payload);
-              term.write("\x1b[33m按回车键重新连接...\x1b[0m\r\n");
-              triggerUpdate();
-            }
-          );
-
+          inst.unlistenOutput = await setupSessionOutput(inst, returnedId);
+          if (inst.disposed) {
+            inst.unlistenOutput();
+            await invoke("ssh_disconnect", { sessionId: returnedId });
+            return;
+          }
           triggerUpdate();
         } catch (err) {
+          void invoke("ssh_disconnect", { sessionId }).catch(() => {});
+          if (inst.disposed) return;
           const errMsg = typeof err === "string" ? err : String(err);
           term.write(`\r\n\x1b[31m--- 连接失败 ---\x1b[0m\r\n`);
           term.write(`\x1b[31m${errMsg}\x1b[0m\r\n\r\n`);
@@ -737,7 +749,7 @@ export function TerminalPage() {
           unlistenPrompt?.();
         }
     },
-    [connections, triggerUpdate, setupAuthPromptListener]
+    [connections, triggerUpdate, setupAuthPromptListener, setupSessionOutput]
   );
 
   useEffect(() => {
@@ -796,8 +808,8 @@ export function TerminalPage() {
   const closeTab = (tabId: string) => {
     const inst = terminals.find((t) => t.id === tabId);
     if (inst) {
-      inst.unlistenData?.();
-      inst.unlistenClose?.();
+      inst.disposed = true;
+      inst.unlistenOutput?.();
       inst.terminal.dispose();
       inst.containerEl.remove();
       if (!inst.disconnected) {

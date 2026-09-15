@@ -109,6 +109,7 @@ pub async fn ssh_connect(
             request.rows,
             connection.keepalive_interval_secs,
             connection.keepalive_max,
+            request.output_flow_control,
         )
         .await
         .map_err(|e| {
@@ -277,6 +278,7 @@ pub async fn ssh_connect(
             request.cols,
             request.rows,
             app,
+            request.output_flow_control,
         )
         .await
         .map_err(|e| {
@@ -666,4 +668,21 @@ pub async fn ssh_resize(
         .await
         .ok_or_else(|| "session not found".to_string())?;
     result
+}
+
+#[tauri::command]
+pub async fn ssh_output_ready(
+    manager: State<'_, SessionManager>,
+    session_id: String,
+) -> Result<(), String> {
+    manager.ready_output(&session_id).await
+}
+
+#[tauri::command]
+pub async fn ssh_ack_output(
+    manager: State<'_, SessionManager>,
+    session_id: String,
+    bytes: usize,
+) -> Result<(), String> {
+    manager.ack_output(&session_id, bytes).await
 }

@@ -1,4 +1,4 @@
-use super::{SessionCmd, TRANSFER_CANCELLED_MESSAGE};
+use super::{OutputFlow, SessionCmd, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::ClientHandler;
@@ -17,6 +17,7 @@ pub struct SshSession {
     #[allow(dead_code)]
     pub channel_id: ChannelId,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
+    output_flow: Arc<OutputFlow>,
 }
 
 impl SshSession {
@@ -27,6 +28,7 @@ impl SshSession {
         cols: u32,
         rows: u32,
         app: AppHandle,
+        output_flow_control: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let channel = handle.channel_open_session().await?;
         // want_reply: true — 等待服务端确认，部分堡垒机对无回复的 PTY/shell 请求会拒绝会话
@@ -38,10 +40,80 @@ impl SshSession {
         let channel_id = channel.id();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
         let sid = id.clone();
+        let output_flow = Arc::new(OutputFlow::new(output_flow_control));
+        let output_flow_loop = output_flow.clone();
 
         tokio::spawn(async move {
+            enum PendingOutput {
+                Data { bytes: Vec<u8>, offset: usize },
+                Close,
+            }
+
             let mut ch = channel;
-            loop {
+            let mut pending_output = None;
+
+            'session: loop {
+                if let Some(pending) = pending_output.as_ref() {
+                    let reserve_bytes = match pending {
+                        PendingOutput::Data { bytes, offset } => {
+                            (bytes.len() - offset).min(SSH_OUTPUT_CHUNK_BYTES)
+                        }
+                        PendingOutput::Close => 0,
+                    };
+
+                    tokio::select! {
+                        reserved = output_flow_loop.reserve(reserve_bytes) => {
+                            if !reserved {
+                                break 'session;
+                            }
+
+                            match pending_output.take().expect("pending output must exist") {
+                                PendingOutput::Data { bytes, offset } => {
+                                    let end = (offset + SSH_OUTPUT_CHUNK_BYTES).min(bytes.len());
+                                    let _ = app.emit(
+                                        &format!("ssh-data-{}", sid),
+                                        bytes[offset..end].to_vec(),
+                                    );
+                                    if end < bytes.len() {
+                                        pending_output = Some(PendingOutput::Data {
+                                            bytes,
+                                            offset: end,
+                                        });
+                                    }
+                                }
+                                PendingOutput::Close => {
+                                    record_event(
+                                        Some(&app),
+                                        "ssh_session",
+                                        format!(
+                                            "SSH 通道结束 session_id={sid}（EOF 或对端关闭连接）"
+                                        ),
+                                    );
+                                    let _ = app.emit(
+                                        &format!("ssh-close-{}", sid),
+                                        SshClosePayload {
+                                            reason: "remote".to_string(),
+                                        },
+                                    );
+                                    break 'session;
+                                }
+                            }
+                        }
+                        command = cmd_rx.recv() => {
+                            match command {
+                                Some(SessionCmd::Data(data)) => {
+                                    let _ = ch.data(std::io::Cursor::new(data)).await;
+                                }
+                                Some(SessionCmd::Resize { cols, rows }) => {
+                                    let _ = ch.window_change(cols, rows, 0, 0).await;
+                                }
+                                None => break 'session,
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 loop {
                     match cmd_rx.try_recv() {
                         Ok(SessionCmd::Data(data)) => {
@@ -51,28 +123,19 @@ impl SshSession {
                             let _ = ch.window_change(cols, rows, 0, 0).await;
                         }
                         Err(mpsc::error::TryRecvError::Empty) => break,
-                        Err(mpsc::error::TryRecvError::Disconnected) => return,
+                        Err(mpsc::error::TryRecvError::Disconnected) => break 'session,
                     }
                 }
 
                 match tokio::time::timeout(std::time::Duration::from_millis(5), ch.wait()).await {
                     Ok(Some(russh::ChannelMsg::Data { ref data })) => {
-                        let bytes: Vec<u8> = data.to_vec();
-                        let _ = app.emit(&format!("ssh-data-{}", sid), bytes);
+                        pending_output = Some(PendingOutput::Data {
+                            bytes: data.to_vec(),
+                            offset: 0,
+                        });
                     }
                     Ok(Some(russh::ChannelMsg::Eof)) | Ok(None) => {
-                        record_event(
-                            Some(&app),
-                            "ssh_session",
-                            format!("SSH 通道结束 session_id={sid}（EOF 或对端关闭连接）"),
-                        );
-                        let _ = app.emit(
-                            &format!("ssh-close-{}", sid),
-                            SshClosePayload {
-                                reason: "remote".to_string(),
-                            },
-                        );
-                        break;
+                        pending_output = Some(PendingOutput::Close);
                     }
                     Ok(Some(russh::ChannelMsg::ExitStatus { exit_status })) => {
                         let _ = app.emit(&format!("ssh-exit-{}", sid), exit_status);
@@ -81,6 +144,8 @@ impl SshSession {
                     _ => {}
                 }
             }
+
+            output_flow_loop.close();
         });
 
         Ok(Self {
@@ -89,6 +154,7 @@ impl SshSession {
             handle,
             channel_id,
             cmd_tx,
+            output_flow,
         })
     }
 
@@ -104,7 +170,16 @@ impl SshSession {
             .map_err(|_| "session closed".to_string())
     }
 
+    pub fn ready_output(&self) {
+        self.output_flow.ready();
+    }
+
+    pub fn ack_output(&self, bytes: usize) {
+        self.output_flow.ack(bytes);
+    }
+
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.output_flow.close();
         self.handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
             .await?;

@@ -33,6 +33,18 @@ impl SessionManager {
         sessions.remove(id)
     }
 
+    pub async fn ready_output(&self, id: &str) -> Result<(), String> {
+        let session = self.session_for_operation(id).await?;
+        session.ready_output();
+        Ok(())
+    }
+
+    pub async fn ack_output(&self, id: &str, bytes: usize) -> Result<(), String> {
+        let session = self.session_for_operation(id).await?;
+        session.ack_output(bytes);
+        Ok(())
+    }
+
     async fn session_for_operation(&self, id: &str) -> Result<Arc<SshSession>, String> {
         let sessions = self.sessions.lock().await;
         sessions
