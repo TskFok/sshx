@@ -190,14 +190,60 @@ fn should_capture(level: Level, target: &str) -> bool {
     if target.starts_with("sshx_lib") || target.starts_with("sshx::") {
         return true;
     }
-    // russh / portable-pty 等在 Info 下较吵，仅记录 Warn 及以上
+    // 依赖的详细日志可能包含认证数据，仅记录 Warn 和 Error。
     (target.contains("russh") || target.contains("portable_pty"))
-        && level >= Level::Warn
+        && level <= Level::Warn
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dependency_errors_and_warnings_are_captured() {
+        for target in ["russh::client::encrypted", "portable_pty::cmdbuilder"] {
+            for level in [Level::Error, Level::Warn] {
+                assert!(should_capture(level, target), "{target} {level}");
+            }
+        }
+    }
+
+    #[test]
+    fn verbose_dependency_logs_are_not_captured() {
+        for target in ["russh::client::encrypted", "portable_pty::cmdbuilder"] {
+            for level in [Level::Info, Level::Debug, Level::Trace] {
+                assert!(!should_capture(level, target), "{target} {level}");
+            }
+        }
+    }
+
+    #[test]
+    fn application_logs_remain_eligible_at_all_levels() {
+        for target in ["sshx_lib::commands::ssh", "sshx::commands::ssh"] {
+            for level in [
+                Level::Error,
+                Level::Warn,
+                Level::Info,
+                Level::Debug,
+                Level::Trace,
+            ] {
+                assert!(should_capture(level, target), "{target} {level}");
+            }
+        }
+    }
+
+    #[test]
+    fn unrelated_dependency_logs_are_not_captured() {
+        for level in [
+            Level::Error,
+            Level::Warn,
+            Level::Info,
+            Level::Debug,
+            Level::Trace,
+        ] {
+            assert!(!should_capture(level, "unrelated_dependency"));
+        }
+    }
 
     #[test]
     fn record_event_skips_when_capture_disabled() {

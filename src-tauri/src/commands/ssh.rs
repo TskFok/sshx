@@ -11,9 +11,9 @@ use crate::ssh::keyboard_interactive::{
     try_auto_ki_empty_prompts_response, try_auto_ki_password_response,
 };
 use crate::ssh::manager::SessionManager;
+use crate::ssh::prompt::AuthPromptManager;
 #[cfg(not(target_os = "macos"))]
 use crate::ssh::prompt::{AuthPromptPayload, PromptItem};
-use crate::ssh::prompt::AuthPromptManager;
 #[cfg(not(target_os = "macos"))]
 use crate::ssh::session::SshSession;
 #[cfg(not(target_os = "macos"))]
@@ -104,7 +104,6 @@ pub async fn ssh_connect(
             connection.port,
             &connection.username,
             &auth,
-            connection.private_key_passphrase.as_deref(),
             request.cols,
             request.rows,
             connection.keepalive_interval_secs,
@@ -137,15 +136,16 @@ pub async fn ssh_connect(
             connection.keepalive_interval_secs,
             connection.keepalive_max,
         );
-        let handler = ClientHandler;
+        let handler = ClientHandler::new(connection.host.clone(), connection.port);
 
-        let mut handle = russh::client::connect(config, (&*connection.host, connection.port), handler)
-            .await
-            .map_err(|e| {
-                let msg = format!("无法连接到 {}:{} - {}", connection.host, connection.port, e);
-                record_event(Some(&app), "ssh_connect", format!("传输层失败: {msg}"));
-                msg
-            })?;
+        let mut handle =
+            russh::client::connect(config, (&*connection.host, connection.port), handler)
+                .await
+                .map_err(|e| {
+                    let msg = format!("无法连接到 {}:{} - {}", connection.host, connection.port, e);
+                    record_event(Some(&app), "ssh_connect", format!("传输层失败: {msg}"));
+                    msg
+                })?;
         record_event(Some(&app), "ssh_connect", "SSH 传输层已建立，开始用户认证");
 
         let password_for_ki = auth.password_for_ki().map(|s| s.to_string());
@@ -161,7 +161,9 @@ pub async fn ssh_connect(
                 match r {
                     Ok(AuthResult::Success) => authenticated = true,
                     Ok(AuthResult::Failure { .. }) => {}
-                    Err(e) => log::warn!("password auth error (will try keyboard-interactive): {}", e),
+                    Err(e) => {
+                        log::warn!("password auth error (will try keyboard-interactive): {}", e)
+                    }
                 }
             }
             AuthMethod::PublicKey(key) => {
@@ -172,10 +174,15 @@ pub async fn ssh_connect(
                 match r {
                     Ok(AuthResult::Success) => authenticated = true,
                     Ok(AuthResult::Failure { .. }) => {}
-                    Err(e) => log::warn!("pubkey auth error (will try keyboard-interactive): {}", e),
+                    Err(e) => {
+                        log::warn!("pubkey auth error (will try keyboard-interactive): {}", e)
+                    }
                 }
             }
-            AuthMethod::KeyAndPassword { public_key, password } => {
+            AuthMethod::KeyAndPassword {
+                public_key,
+                password,
+            } => {
                 let r = handle
                     .authenticate_publickey(&connection.username, public_key.clone())
                     .await;
@@ -241,7 +248,7 @@ pub async fn ssh_connect(
                         "keyboard-interactive 结束: 失败或被拒",
                     );
                     return Err(
-                        "认证失败：二次验证被拒绝或未完成（keyboard-interactive）".to_string(),
+                        "认证失败：二次验证被拒绝或未完成（keyboard-interactive）".to_string()
                     );
                 }
                 Err(e) => {
@@ -492,7 +499,6 @@ pub async fn test_connection(
             request.port,
             &request.username,
             &auth,
-            request.private_key_passphrase.as_deref(),
             request.keepalive_interval_secs,
             request.keepalive_max,
         )
@@ -507,7 +513,7 @@ pub async fn test_connection(
             request.keepalive_interval_secs,
             request.keepalive_max,
         );
-        let handler = ClientHandler;
+        let handler = ClientHandler::new(request.host.clone(), request.port);
 
         let mut handle = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -533,10 +539,7 @@ pub async fn test_connection(
 
         match &auth {
             AuthMethod::Password(pwd) => {
-                match handle
-                    .authenticate_password(&request.username, pwd)
-                    .await
-                {
+                match handle.authenticate_password(&request.username, pwd).await {
                     Ok(AuthResult::Success) => authenticated = true,
                     Ok(AuthResult::Failure { .. }) => {}
                     Err(_) => {}
@@ -552,7 +555,10 @@ pub async fn test_connection(
                     Err(_) => {}
                 }
             }
-            AuthMethod::KeyAndPassword { public_key, password } => {
+            AuthMethod::KeyAndPassword {
+                public_key,
+                password,
+            } => {
                 match handle
                     .authenticate_publickey(&request.username, public_key.clone())
                     .await
@@ -603,7 +609,7 @@ pub async fn test_connection(
                                         "需二次验证（keyboard-interactive），测试连接结束",
                                     );
                                     return Ok(
-                                        "连接成功（服务器需要额外验证，如二次验证码）".to_string(),
+                                        "连接成功（服务器需要额外验证，如二次验证码）".to_string()
                                     );
                                 }
                                 KeyboardInteractiveAuthResponse::Failure { .. } => {}

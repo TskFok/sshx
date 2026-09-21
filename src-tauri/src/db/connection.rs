@@ -17,8 +17,10 @@ fn now_timestamp() -> i64 {
 
 pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, host, port, username, auth_type, password, private_key, \
-         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
+        "SELECT id, name, host, port, username, auth_type, \
+         sshx_decrypt(password, id, 'password'), sshx_decrypt(private_key, id, 'private_key'), \
+         sshx_decrypt(private_key_passphrase, id, 'private_key_passphrase'), \
+         group_id, keepalive_interval_secs, keepalive_max, is_important, \
          created_at, updated_at, sort_order \
          FROM connections ORDER BY sort_order ASC, updated_at DESC",
     )?;
@@ -49,8 +51,10 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Erro
 
 pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ConnectionInfo>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, host, port, username, auth_type, password, private_key, \
-         private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
+        "SELECT id, name, host, port, username, auth_type, \
+         sshx_decrypt(password, id, 'password'), sshx_decrypt(private_key, id, 'private_key'), \
+         sshx_decrypt(private_key_passphrase, id, 'private_key_passphrase'), \
+         group_id, keepalive_interval_secs, keepalive_max, is_important, \
          created_at, updated_at, sort_order \
          FROM connections WHERE id = ?1",
     )?;
@@ -94,7 +98,7 @@ pub fn create(
         "INSERT INTO connections (id, name, host, port, username, auth_type, password, \
          private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
          created_at, updated_at, sort_order) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, sshx_encrypt(?7, ?1, 'password'), sshx_encrypt(?8, ?1, 'private_key'), sshx_encrypt(?9, ?1, 'private_key_passphrase'), ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             id,
             req.name,
@@ -154,7 +158,7 @@ pub fn update(conn: &Connection, req: &UpdateConnectionRequest) -> Result<(), ru
 
     conn.execute(
         "UPDATE connections SET name = ?1, host = ?2, port = ?3, username = ?4, \
-         auth_type = ?5, password = ?6, private_key = ?7, private_key_passphrase = ?8, \
+         auth_type = ?5, password = sshx_encrypt(?6, ?15, 'password'), private_key = sshx_encrypt(?7, ?15, 'private_key'), private_key_passphrase = sshx_encrypt(?8, ?15, 'private_key_passphrase'), \
          group_id = ?9, keepalive_interval_secs = ?10, keepalive_max = ?11, is_important = ?12, \
          updated_at = ?13, sort_order = ?14 WHERE id = ?15",
         params![
@@ -390,7 +394,7 @@ pub fn import_all(
                 "INSERT INTO connections (id, name, host, port, username, auth_type, password, \
                  private_key, private_key_passphrase, group_id, keepalive_interval_secs, keepalive_max, is_important, \
                  created_at, updated_at, sort_order) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, sshx_encrypt(?7, ?1, 'password'), sshx_encrypt(?8, ?1, 'private_key'), sshx_encrypt(?9, ?1, 'private_key_passphrase'), ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     new_id,
                     imported_connection.name,
@@ -445,6 +449,45 @@ mod tests {
         )
         .unwrap()
         .id
+    }
+
+    #[test]
+    fn saved_credentials_are_encrypted_and_roundtrip() {
+        let conn = create_test_db();
+        let request = CreateConnectionRequest {
+            name: "encrypted connection".into(),
+            host: "example.com".into(),
+            port: 22,
+            username: "test".into(),
+            auth_type: AuthType::KeyPassword,
+            password: Some("test-login-secret".into()),
+            private_key: Some("/test/private-key".into()),
+            private_key_passphrase: Some("test-key-secret".into()),
+            group_id: None,
+            keepalive_interval_secs: 30,
+            keepalive_max: 3,
+            is_important: false,
+        };
+        let saved = create(&conn, &request).unwrap();
+        let raw: (String, String, String) = conn.query_row(
+            "SELECT password, private_key, private_key_passphrase FROM connections WHERE id = ?1",
+            [&saved.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_ne!(raw.0, "test-login-secret");
+        assert_ne!(raw.1, "/test/private-key");
+        assert_ne!(raw.2, "test-key-secret");
+        let restored = get_by_id(&conn, &saved.id).unwrap().unwrap();
+        assert_eq!(restored.password, request.password);
+        assert_eq!(restored.private_key, request.private_key);
+        assert_eq!(
+            restored.private_key_passphrase,
+            request.private_key_passphrase
+        );
+        assert_eq!(
+            export_all(&conn).unwrap().connections[0].password,
+            request.password
+        );
     }
 
     #[test]

@@ -3,9 +3,9 @@ use crate::models::AuthType;
 use russh::keys::key::PrivateKeyWithHashAlg;
 #[cfg(not(target_os = "macos"))]
 use russh::keys::{decode_secret_key, PrivateKey};
+use std::path::Path;
 #[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
-use std::path::Path;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -50,15 +50,6 @@ impl AuthMethod {
             _ => None,
         }
     }
-
-    #[cfg(target_os = "macos")]
-    pub fn key_path(&self) -> Option<&str> {
-        match self {
-            AuthMethod::KeyFile(path) => Some(path),
-            AuthMethod::KeyAndPassword { key_path, .. } => Some(key_path),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -83,8 +74,7 @@ fn load_key_from_path(
         decode_secret_key(&key_content, Some(phrase))
             .map_err(|e| AuthError::InvalidKey(e.to_string()))?
     } else {
-        decode_secret_key(&key_content, None)
-            .map_err(|e| AuthError::InvalidKey(e.to_string()))?
+        decode_secret_key(&key_content, None).map_err(|e| AuthError::InvalidKey(e.to_string()))?
     };
     let key_pair = prefer_ssh_rsa_for_rsa_key(Arc::new(key_pair));
     Ok((expanded, key_pair))
@@ -187,7 +177,17 @@ fn expand_tilde(path: &str) -> String {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub struct ClientHandler;
+pub struct ClientHandler {
+    host: String,
+    port: u16,
+}
+
+#[cfg(not(target_os = "macos"))]
+impl ClientHandler {
+    pub fn new(host: String, port: u16) -> Self {
+        Self { host, port }
+    }
+}
 
 #[cfg(not(target_os = "macos"))]
 impl russh::client::Handler for ClientHandler {
@@ -195,9 +195,9 @@ impl russh::client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        super::host_key::verify_server_key(&self.host, self.port, server_public_key, None)
     }
 }
 

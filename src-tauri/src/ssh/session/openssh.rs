@@ -1,6 +1,6 @@
 //! macOS：使用系统 `/usr/bin/ssh` 与子进程 PTY，替代 russh 协议栈。
 
-use super::{OutputFlow, SessionCmd, TRANSFER_CANCELLED_MESSAGE, SSH_OUTPUT_CHUNK_BYTES};
+use super::{OutputFlow, SessionCmd, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::AuthMethod;
@@ -195,7 +195,9 @@ impl SshSession {
         let rb = remote_base_dir.to_string();
         let rn = remote_name.to_string();
         let lp = local_path.to_path_buf();
-        let initial_local_size = std::fs::metadata(local_path).ok().map(|metadata| metadata.len());
+        let initial_local_size = std::fs::metadata(local_path)
+            .ok()
+            .map(|metadata| metadata.len());
         let mut observed_local_changed = initial_local_size.is_none();
         let poll_path = lp.clone();
         let progress_probe: ProgressProbe = Box::new(move || {
@@ -312,11 +314,9 @@ impl SshSession {
         }
         let prefix = self.ssh_mux_prefix_args.clone();
         let dest = self.sftp_destination.clone();
-        tokio::task::spawn_blocking(move || {
-            remote_file_size_via_mux(&prefix, &dest, &path)
-        })
-        .await
-        .map_err(|e| format!("读取远程文件信息任务异常: {e}"))?
+        tokio::task::spawn_blocking(move || remote_file_size_via_mux(&prefix, &dest, &path))
+            .await
+            .map_err(|e| format!("读取远程文件信息任务异常: {e}"))?
     }
 }
 
@@ -335,9 +335,7 @@ fn run_ssh_mux_exec_argv(
     for a in remote_argv {
         c.arg(a);
     }
-    let out = c
-        .output()
-        .map_err(|e| format!("执行 ssh 失败: {e}"))?;
+    let out = c.output().map_err(|e| format!("执行 ssh 失败: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let hint = if stderr.is_empty() {
@@ -359,7 +357,6 @@ pub async fn connect_openssh(
     port: u16,
     username: &str,
     auth: &AuthMethod,
-    key_passphrase: Option<&str>,
     cols: u32,
     rows: u32,
     keepalive_interval_secs: u32,
@@ -407,7 +404,6 @@ pub async fn connect_openssh(
         &mut auth_rx,
         session_id,
         auth,
-        key_passphrase,
         &log_path,
         &mut pty_rx,
         &writer,
@@ -519,7 +515,6 @@ pub async fn connect_openssh_test(
     port: u16,
     username: &str,
     auth: &AuthMethod,
-    key_passphrase: Option<&str>,
     keepalive_interval_secs: u32,
     keepalive_max: u32,
 ) -> Result<String, String> {
@@ -556,7 +551,6 @@ pub async fn connect_openssh_test(
         &mut auth_rx,
         session_id,
         auth,
-        key_passphrase,
         &log_path,
         &mut pty_rx,
         &writer,
@@ -774,12 +768,8 @@ fn drain_sftp_output<F>(
     }
 }
 
-fn report_progress_bytes<F>(
-    last_reported: &mut u64,
-    total_bytes: u64,
-    bytes: u64,
-    progress: &mut F,
-) where
+fn report_progress_bytes<F>(last_reported: &mut u64, total_bytes: u64, bytes: u64, progress: &mut F)
+where
     F: FnMut(u64),
 {
     let clamped = if total_bytes == 0 {
@@ -793,7 +783,11 @@ fn report_progress_bytes<F>(
     }
 }
 
-fn remote_file_size_via_mux(prefix: &[String], destination: &str, path: &str) -> Result<u64, String> {
+fn remote_file_size_via_mux(
+    prefix: &[String],
+    destination: &str,
+    path: &str,
+) -> Result<u64, String> {
     run_ssh_mux_exec_argv(prefix, destination, &["test", "-f", path])?;
     let out = run_ssh_mux_exec_argv(prefix, destination, &["wc", "-c", path])?;
     parse_wc_file_size(&out)
@@ -871,9 +865,7 @@ fn build_sftp_slave_prefix(
         "-o".to_string(),
         format!("ControlPath={control_path}"),
         "-o".to_string(),
-        "StrictHostKeyChecking=no".to_string(),
-        "-o".to_string(),
-        "UserKnownHostsFile=/dev/null".to_string(),
+        "StrictHostKeyChecking=yes".to_string(),
         "-o".to_string(),
         "HostKeyAlgorithms=+ssh-rsa".to_string(),
     ];
@@ -916,9 +908,7 @@ fn build_ssh_slave_prefix(
         "-o".to_string(),
         format!("ControlPath={control_path}"),
         "-o".to_string(),
-        "StrictHostKeyChecking=no".to_string(),
-        "-o".to_string(),
-        "UserKnownHostsFile=/dev/null".to_string(),
+        "StrictHostKeyChecking=yes".to_string(),
         "-o".to_string(),
         "HostKeyAlgorithms=+ssh-rsa".to_string(),
     ];
@@ -960,9 +950,7 @@ fn build_ssh_args(
     // （VERBOSE 在部分版本下不足以写入这些行，导致堡垒机场景误判超时）。
     let mut args = vec![
         "-o".to_string(),
-        "StrictHostKeyChecking=no".to_string(),
-        "-o".to_string(),
-        "UserKnownHostsFile=/dev/null".to_string(),
+        "StrictHostKeyChecking=yes".to_string(),
         "-E".to_string(),
         log_path.to_string(),
         "-o".to_string(),
@@ -1056,10 +1044,7 @@ async fn spawn_ssh_pty(
         for a in ssh_args {
             cmd.arg(a);
         }
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| e.to_string())?;
+        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         let master = pair.master;
         let reader = master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = master.take_writer().map_err(|e| e.to_string())?;
@@ -1104,7 +1089,6 @@ async fn run_auth_until_ready(
     auth_rx: &mut mpsc::UnboundedReceiver<Vec<String>>,
     session_id: &str,
     auth: &AuthMethod,
-    key_passphrase: Option<&str>,
     log_path: &str,
     pty_rx: &mut mpsc::Receiver<Vec<u8>>,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
@@ -1113,7 +1097,6 @@ async fn run_auth_until_ready(
     let mut scan = String::new();
     let mut log_ofs: usize = 0;
     let mut password_sent = false;
-    let mut passphrase_sent = false;
     // 最近一次用户已应答的 MFA 首条提示；用于识别缓冲残留导致的重复匹配
     let mut last_answered_mfa_signature: Option<String> = None;
     let start = std::time::Instant::now();
@@ -1175,21 +1158,14 @@ async fn run_auth_until_ready(
             }
         }
 
+        // PTY 文本也可能来自远端，不能据此发送仅供本地使用的私钥口令。
+        check_private_key_prompt(&scan)?;
+
         if let Some(p) = auth.password_for_ki() {
             if should_offer_password_prompt(&scan) && !password_sent {
                 password_sent = true;
                 record_event(Some(&app), "ssh_ki", "OpenSSH: 自动应答密码提示");
                 pty_write_line(writer, p).await;
-            }
-        }
-
-        if auth.key_path().is_some() {
-            if let Some(pp) = key_passphrase {
-                if scan_contains_passphrase_prompt(&scan) && !passphrase_sent {
-                    passphrase_sent = true;
-                    record_event(Some(&app), "ssh_ki", "OpenSSH: 自动应答密钥口令");
-                    pty_write_line(writer, pp).await;
-                }
             }
         }
 
@@ -1281,6 +1257,12 @@ fn scan_contains_authenticated(s: &str) -> bool {
 
 /// 明确失败时尽快返回，避免空等到 120s
 fn scan_fatal_disconnect(s: &str) -> Option<String> {
+    if s.contains("Host key verification failed")
+        || s.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
+        || s.contains("you have requested strict checking")
+    {
+        return Some("SSH 主机密钥未受信任或已变更，已拒绝连接。请先在系统终端使用 ssh 连接相同主机和端口，向服务器管理员独立核验指纹后再保存到 known_hosts；不要忽略密钥变更警告。".to_string());
+    }
     if s.contains("no matching host key type") {
         return Some(
             "与服务器主机密钥算法无法协商（对端常见仅提供 ssh-rsa）。请确认客户端已使用 HostKeyAlgorithms=+ssh-rsa（本应用已默认添加）。"
@@ -1326,7 +1308,8 @@ fn auth_rejection_from_line(t: &str) -> Option<String> {
     if low.contains("no more authentication methods to try") {
         return Some("认证失败：已无可用认证方式".to_string());
     }
-    if t.contains("认证失败") || t.contains("账号已过期") || t.contains("账户已过期") {
+    if t.contains("认证失败") || t.contains("账号已过期") || t.contains("账户已过期")
+    {
         return Some(t.to_string());
     }
     None
@@ -1362,9 +1345,15 @@ fn should_offer_password_prompt(s: &str) -> bool {
         || s.contains("用户口令")
 }
 
+fn check_private_key_prompt(scan: &str) -> Result<(), String> {
+    if scan_contains_passphrase_prompt(scan) {
+        return Err("为保护私钥口令，已停止此认证。请先在系统终端使用 ssh-add 加载并解锁私钥，再重新连接；不要向远端认证提示输入私钥口令。".to_string());
+    }
+    Ok(())
+}
+
 fn scan_contains_passphrase_prompt(s: &str) -> bool {
-    s.to_lowercase()
-        .contains("enter passphrase for key")
+    s.to_lowercase().contains("enter passphrase for key")
 }
 
 /// 去掉已处理的 MFA 提示行，防止 PTY/日志合并缓冲里残留同一句导致二次弹窗。
@@ -1403,10 +1392,7 @@ fn strip_one_line_matching_prompt(scan: &mut String, needle: &str) {
 
 fn detect_mfa_ui(s: &str) -> Option<(String, String, Vec<PromptItem>)> {
     let line = last_interactive_prompt_for_ui(s)?;
-    if line
-        .trim_start()
-        .to_lowercase()
-        .starts_with("debug1:")
+    if line.trim_start().to_lowercase().starts_with("debug1:")
         || line.trim_start().to_lowercase().starts_with("debug2:")
         || line.trim_start().to_lowercase().starts_with("debug3:")
     {
@@ -1459,10 +1445,7 @@ fn last_interactive_prompt_for_ui(s: &str) -> Option<&str> {
             continue;
         }
         let low = t.to_lowercase();
-        if low.starts_with("debug1:")
-            || low.starts_with("debug2:")
-            || low.starts_with("debug3:")
-        {
+        if low.starts_with("debug1:") || low.starts_with("debug2:") || low.starts_with("debug3:") {
             continue;
         }
         if looks_like_ssh_client_status_line(t) {
@@ -1509,7 +1492,8 @@ fn looks_like_digit_count_otp_prompt(low: &str) -> bool {
 
 fn is_password_like_ki_prompt(low: &str) -> bool {
     low.contains("passphrase")
-        || ((low.contains("password") || low.contains("密码")) && !looks_like_digit_count_otp_prompt(low))
+        || ((low.contains("password") || low.contains("密码"))
+            && !looks_like_digit_count_otp_prompt(low))
         || low.contains("password:")
 }
 
@@ -1592,6 +1576,48 @@ mod tests {
         .expect("恢复消费后读取线程应结束");
 
         assert_eq!(output.as_slice(), input.as_slice());
+    }
+
+    #[test]
+    fn security_all_openssh_commands_require_verified_host_keys() {
+        let auth = AuthMethod::Password("fake-test-password".into());
+        let commands = [
+            build_ssh_args(
+                "example.test",
+                2222,
+                "user",
+                &auth,
+                0,
+                0,
+                "/tmp/fake.log",
+                None,
+                None,
+            )
+            .unwrap(),
+            build_ssh_slave_prefix("/tmp/fake.sock", 2222, "user", "example.test", &auth)
+                .unwrap()
+                .0,
+            build_sftp_slave_prefix("/tmp/fake.sock", 2222, "user", "example.test", &auth)
+                .unwrap()
+                .0,
+        ];
+        for args in commands {
+            assert!(args
+                .windows(2)
+                .any(|pair| pair == ["-o", "StrictHostKeyChecking=yes"]));
+            assert!(!args
+                .iter()
+                .any(|arg| arg.starts_with("UserKnownHostsFile=")));
+        }
+    }
+
+    #[test]
+    fn security_refuses_local_passphrase_requests_from_remote_text() {
+        let message =
+            check_private_key_prompt("Enter passphrase for key '/fake/test-key': ").unwrap_err();
+        assert!(message.contains("ssh-add"));
+        assert!(check_private_key_prompt("user@example.test's password: ").is_ok());
+        assert!(check_private_key_prompt("Verification code: ").is_ok());
     }
 
     #[test]
@@ -1692,7 +1718,9 @@ mod tests {
         assert!(args.contains(&"/path/to/key".into()));
         assert!(args.iter().any(|a| a == "IdentitiesOnly=yes"));
         assert!(args.iter().any(|a| a == "HostKeyAlgorithms=+ssh-rsa"));
-        assert!(args.iter().any(|a| a == "PubkeyAcceptedAlgorithms=+ssh-rsa"));
+        assert!(args
+            .iter()
+            .any(|a| a == "PubkeyAcceptedAlgorithms=+ssh-rsa"));
         assert!(args.last() == Some(&"true".into()));
     }
 
@@ -1729,7 +1757,9 @@ mod tests {
 
         report_progress_bytes(&mut last_reported, 100, 25, &mut |bytes| events.push(bytes));
         report_progress_bytes(&mut last_reported, 100, 20, &mut |bytes| events.push(bytes));
-        report_progress_bytes(&mut last_reported, 100, 120, &mut |bytes| events.push(bytes));
+        report_progress_bytes(&mut last_reported, 100, 120, &mut |bytes| {
+            events.push(bytes)
+        });
 
         assert_eq!(events, vec![25, 100]);
     }

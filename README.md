@@ -52,7 +52,7 @@
 
 - Node.js >= 18
 - pnpm >= 8
-- Rust（建议 stable 最新版）
+- Rust >= 1.88（建议 stable 最新版）
 - Tauri 依赖环境（见 [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/)）
 
 ### 安装与运行
@@ -210,6 +210,10 @@ defaults write -g ApplePressAndHoldEnabled -bool true
 - 本项目默认仅用于合法授权的远程主机管理
 - 请勿在未授权场景使用
 - 涉及认证信息时请遵循最小权限原则
+- 本地连接的密码、私钥口令和私钥路径使用 AES-256-GCM 加密保存，随机密钥单独存放在 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 中。Linux 运行环境需要可用且已解锁的 Secret Service（如 GNOME Keyring / KWallet）；凭据库不可用或密钥丢失时，应用会停止加载，不回退到明文存储。首次启动新版会迁移旧数据库并清理数据库内的明文残留，但不会改动历史备份或系统快照。
+- 跨设备迁移请使用应用中的加密导出/导入；仅复制 `sshx.db` 不包含解密所需的系统密钥。
+- SSH 连接与连接测试只接受已核验的主机密钥；未知或变更的密钥会拒绝连接。首次使用前，请在系统终端用 `ssh -p <端口> <用户名>@<主机>` 连接，并通过服务器管理员等独立渠道核验指纹后保存到 `known_hosts`。密钥变更时请先核实原因，不要直接忽略警告。macOS 使用系统 OpenSSH 的主机记录；其他平台读取用户的 `~/.ssh/known_hosts`。
+- macOS 不再根据终端提示自动填写保存的私钥口令，也不会要求把本地私钥口令填入远端认证弹窗。使用加密私钥时，请先在系统终端执行 `ssh-add <私钥路径>` 解锁并加载到 SSH agent，再启动或重新连接 SSHX；应用需要能访问同一 SSH agent。其他平台仍在本地解密私钥，不向服务器发送私钥口令。
 
 ## License
 

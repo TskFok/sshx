@@ -130,7 +130,7 @@ export function Diagnostics() {
                 <CardTitle>诊断日志</CardTitle>
                 <CardDescription className="mt-1">
                   需先在「设置」中开启「收集诊断日志」。开启后记录 SSH
-                  连接、认证、keyboard-interactive 及本应用相关日志（不含密码内容）。
+                  连接、认证、keyboard-interactive 及本应用相关日志。日志可能包含主机、用户名或路径，分享前请先审阅。
                 </CardDescription>
               </div>
             </div>
