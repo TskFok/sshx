@@ -93,6 +93,10 @@ import {
   buildConnectionCredentials,
   type ConnectionAuthType,
 } from "@/lib/connectionAuth";
+import {
+  pathFromOpenDialogSelection,
+  privateKeyFileDialogOptions,
+} from "@/lib/privateKeyPath";
 
 interface ConnectionFormData {
   name: string;
@@ -250,6 +254,15 @@ export function Connections() {
     } catch (err) {
       console.error("save connection error:", err);
     }
+  };
+
+  const handlePickPrivateKey = async () => {
+    const selection = await open(privateKeyFileDialogOptions(form.privateKey));
+    const path = pathFromOpenDialogSelection(selection);
+    if (!path) {
+      return;
+    }
+    setForm((current) => ({ ...current, privateKey: path }));
   };
 
   const handleEdit = async (conn: ConnectionInfo) => {
@@ -1244,15 +1257,24 @@ export function Connections() {
               <>
                 <div className="space-y-2">
                   <Label>私钥路径</Label>
-                  <Input
-                    placeholder="~/.ssh/id_rsa"
-                    value={form.privateKey}
-                    onChange={(e) =>
-                      setForm({ ...form, privateKey: e.target.value })
-                    }
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="~/.ssh/id_rsa"
+                      value={form.privateKey}
+                      onChange={(e) =>
+                        setForm({ ...form, privateKey: e.target.value })
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handlePickPrivateKey()}
+                    >
+                      选择文件
+                    </Button>
+                  </div>
                   <p className="text-xs text-muted-foreground">
-                    输入 SSH 私钥文件的绝对路径，支持 ~ 展开
+                    可输入绝对路径（支持 ~ 展开），或点击选择文件
                   </p>
                 </div>
                 <div className="space-y-2">
