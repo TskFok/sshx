@@ -136,7 +136,9 @@ pub async fn ssh_connect(
             connection.keepalive_interval_secs,
             connection.keepalive_max,
         );
-        let handler = ClientHandler::new(connection.host.clone(), connection.port);
+        let handler = ClientHandler::new(connection.host.clone(), connection.port)
+            .with_host_key_prompt(app.clone());
+        let cancellation_guard = handler.host_key_cancellation_guard();
 
         let mut handle =
             russh::client::connect(config, (&*connection.host, connection.port), handler)
@@ -146,6 +148,7 @@ pub async fn ssh_connect(
                     record_event(Some(&app), "ssh_connect", format!("传输层失败: {msg}"));
                     msg
                 })?;
+        cancellation_guard.disarm();
         record_event(Some(&app), "ssh_connect", "SSH 传输层已建立，开始用户认证");
 
         let password_for_ki = auth.password_for_ki().map(|s| s.to_string());
@@ -513,11 +516,23 @@ pub async fn test_connection(
             request.keepalive_interval_secs,
             request.keepalive_max,
         );
-        let handler = ClientHandler::new(request.host.clone(), request.port);
+        let handler = ClientHandler::new(request.host.clone(), request.port)
+            .with_host_key_prompt(app.clone());
+        let cancellation_guard = handler.host_key_cancellation_guard();
+
+        // TCP 建连仍限时 10 秒；握手额外预留主机指纹核验的 120 秒，
+        // 避免用户尚在阅读信任弹窗时被外层网络超时取消。
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::net::TcpStream::connect((&*request.host, request.port)),
+        )
+        .await
+        .map_err(|_| format!("连接超时: {}:{}", request.host, request.port))?
+        .map_err(|error| format!("无法连接到 {}:{} - {error}", request.host, request.port))?;
 
         let mut handle = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            russh::client::connect(config, (&*request.host, request.port), handler),
+            std::time::Duration::from_secs(135),
+            russh::client::connect_stream(config, stream, handler),
         )
         .await
         .map_err(|_| {
@@ -531,6 +546,7 @@ pub async fn test_connection(
             m
         })?;
 
+        cancellation_guard.disarm();
         record_event(Some(&app), "test_connection", "传输层已建立，开始认证");
 
         let password_for_ki = auth.password_for_ki().map(|s| s.to_string());

@@ -7,10 +7,11 @@ mod ssh;
 
 use commands::{
     connection, diagnostic as diagnostic_commands, file_transfer as file_transfer_commands,
-    settings, sftp as sftp_commands, ssh as ssh_commands,
+    host_key as host_key_commands, settings, sftp as sftp_commands, ssh as ssh_commands,
 };
 use db::Database;
 use file_transfer_commands::TransferCancellationManager;
+use ssh::host_key_prompt::HostKeyPromptManager;
 use ssh::manager::SessionManager;
 use ssh::prompt::AuthPromptManager;
 use tauri::Manager;
@@ -30,6 +31,7 @@ pub fn run() {
         )
         .manage(SessionManager::new())
         .manage(AuthPromptManager::new())
+        .manage(HostKeyPromptManager::new())
         .manage(TransferCancellationManager::new())
         .invoke_handler(tauri::generate_handler![
             diagnostic_commands::diagnostic_logs_get,
@@ -55,6 +57,8 @@ pub fn run() {
             ssh_commands::ssh_ack_output,
             ssh_commands::ssh_auth_respond,
             ssh_commands::ssh_auth_cancel,
+            host_key_commands::ssh_host_key_pending,
+            host_key_commands::ssh_host_key_respond,
             ssh_commands::test_connection,
             sftp_commands::sftp_get_remote_pwd,
             sftp_commands::sftp_list_remote_dir,

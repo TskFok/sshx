@@ -187,6 +187,8 @@ mod output_flow_tests {
 #[cfg(target_os = "macos")]
 mod openssh;
 #[cfg(target_os = "macos")]
+mod openssh_host_key;
+#[cfg(target_os = "macos")]
 pub use openssh::{connect_openssh, connect_openssh_test, SshSession};
 
 #[cfg(not(target_os = "macos"))]

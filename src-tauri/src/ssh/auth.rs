@@ -180,12 +180,31 @@ fn expand_tilde(path: &str) -> String {
 pub struct ClientHandler {
     host: String,
     port: u16,
+    host_key_prompt_app: Option<tauri::AppHandle>,
+    host_key_cancellation: super::host_key_prompt::cancellation::HostKeyCancellation,
 }
 
 #[cfg(not(target_os = "macos"))]
 impl ClientHandler {
     pub fn new(host: String, port: u16) -> Self {
-        Self { host, port }
+        Self {
+            host,
+            port,
+            host_key_prompt_app: None,
+            host_key_cancellation: super::host_key_prompt::cancellation::HostKeyCancellation::new(),
+        }
+    }
+
+    /// 在 connect future 所属命令中持有；成功完成连接后 disarm，取消/超时则直接 drop。
+    pub fn host_key_cancellation_guard(
+        &self,
+    ) -> super::host_key_prompt::cancellation::HostKeyCancellationGuard {
+        self.host_key_cancellation.guard()
+    }
+
+    pub fn with_host_key_prompt(mut self, app: tauri::AppHandle) -> Self {
+        self.host_key_prompt_app = Some(app);
+        self
     }
 }
 
@@ -197,7 +216,19 @@ impl russh::client::Handler for ClientHandler {
         &mut self,
         server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        super::host_key::verify_server_key(&self.host, self.port, server_public_key, None)
+        if let Some(app) = &self.host_key_prompt_app {
+            super::host_key::verify_or_confirm_server_key(
+                app,
+                &self.host,
+                self.port,
+                server_public_key,
+                None,
+                &self.host_key_cancellation,
+            )
+            .await
+        } else {
+            super::host_key::verify_server_key(&self.host, self.port, server_public_key, None)
+        }
     }
 }
 

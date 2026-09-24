@@ -35,6 +35,8 @@ async-trait = "0.1"
 portable-pty = "0.8"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
+hmac = "0.12"
+sha1 = "0.10"
 russh = "0.60"
 russh-sftp = "2"
 

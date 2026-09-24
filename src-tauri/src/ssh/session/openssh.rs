@@ -71,12 +71,116 @@ async fn finish_openssh_authentication(
     Err(error)
 }
 
+struct AuthenticatedPty {
+    child: ChildHandle,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    pty_rx: mpsc::Receiver<Vec<u8>>,
+    host_key_pin: Option<super::openssh_host_key::HostKeyPin>,
+}
+
+/// 只有第一次严格握手发现完全未知的主机时才允许确认；保存后严格重试一次。
+/// 信任弹窗打开前已回收失败进程，避免其继续读取用户认证输入。
+async fn authenticate_pty_with_host_trust(
+    app: &AppHandle,
+    auth_prompts: &AuthPromptManager,
+    session_id: &str,
+    host: &str,
+    port: u16,
+    auth: &AuthMethod,
+    mut ssh_args: Vec<String>,
+    mut log_path: String,
+    control_path: Option<String>,
+    cols: u32,
+    rows: u32,
+) -> Result<AuthenticatedPty, String> {
+    let original_args = ssh_args.clone();
+    let host_trust_context = super::openssh_host_key::capture_context(&original_args).await?;
+    let mut host_key_pin: Option<super::openssh_host_key::HostKeyPin> = None;
+    for attempt in 0..2 {
+        if let Some(pin) = &host_key_pin {
+            pin.ensure_context_unchanged(&original_args).await?;
+        }
+        let (child, reader, writer, master) = spawn_ssh_pty(ssh_args.clone(), cols, rows).await?;
+        let child = Arc::new(Mutex::new(Some(child)));
+        let writer = Arc::new(Mutex::new(writer));
+        let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(master));
+        let (pty_tx, mut pty_rx) = mpsc::channel::<Vec<u8>>(16);
+        run_pty_reader_thread(reader, pty_tx);
+        let mut auth_rx = auth_prompts.register(session_id).await;
+        let outcome = run_auth_until_ready(
+            app.clone(),
+            &mut auth_rx,
+            session_id,
+            auth,
+            &log_path,
+            &mut pty_rx,
+            &writer,
+            Some(child.clone()),
+        )
+        .await;
+        auth_prompts.cancel(session_id).await;
+        match finish_openssh_authentication(
+            child.clone(),
+            control_path.clone(),
+            outcome,
+            "认证失败：用户名或密码/密钥不正确，或未完成二次验证",
+        )
+        .await
+        {
+            Ok(()) => {
+                return Ok(AuthenticatedPty {
+                    child,
+                    writer,
+                    master,
+                    pty_rx,
+                    host_key_pin,
+                })
+            }
+            Err(error) => {
+                if attempt != 0 {
+                    return Err(error);
+                }
+                let Some(pin) = super::openssh_host_key::confirm_unknown_host(
+                    app,
+                    host,
+                    port,
+                    &original_args,
+                    &log_path,
+                    &host_trust_context,
+                )
+                .await?
+                else {
+                    return Err(error);
+                };
+                log_path = temp_log_path()?;
+                let log_index = ssh_args
+                    .iter()
+                    .position(|arg| arg == "-E")
+                    .ok_or_else(|| "SSH 主机校验日志参数缺失".to_string())?
+                    + 1;
+                ssh_args[log_index] = log_path.clone();
+                pin.apply(&mut ssh_args)?;
+                host_key_pin = Some(pin);
+                record_event(
+                    Some(app),
+                    "ssh_connect",
+                    format!("主机指纹已核验，严格重连: -E {log_path}"),
+                );
+            }
+        }
+    }
+    Err("SSH 主机密钥确认后连接失败".to_string())
+}
+
 pub struct SshSession {
     pub id: String,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     output_flow: Arc<OutputFlow>,
     lifecycle: SessionLifecycle,
     child: ChildHandle,
+    // 原生主机指纹拒绝钩子必须保留至会话结束（含 rekey）。
+    _host_key_pin: Option<super::openssh_host_key::HostKeyPin>,
     /// OpenSSH 多路复用控制套接字（用于 `sftp` 复用已认证连接）。
     control_path: String,
     /// `/usr/bin/sftp` 参数（含 ControlPath、StrictHostKey 等，不含 `-b` 与目标）。
@@ -128,6 +232,7 @@ impl SshSession {
             output_flow: Arc::new(OutputFlow::new(false)),
             lifecycle: SessionLifecycle::new(),
             child: Arc::new(Mutex::new(None)),
+            _host_key_pin: None,
             control_path: format!("/tmp/sshx-test-control-{id}"),
             sftp_prefix_args: Vec::new(),
             ssh_mux_prefix_args: Vec::new(),
@@ -426,9 +531,9 @@ pub async fn connect_openssh(
 
     let control_path = compact_control_socket_path();
 
-    let (sftp_prefix_args, sftp_destination) =
+    let (mut sftp_prefix_args, sftp_destination) =
         build_sftp_slave_prefix(&control_path, port, username, host, auth)?;
-    let (ssh_mux_prefix_args, _) =
+    let (mut ssh_mux_prefix_args, _) =
         build_ssh_slave_prefix(&control_path, port, username, host, auth)?;
 
     let ssh_args = build_ssh_args(
@@ -443,35 +548,37 @@ pub async fn connect_openssh(
         Some(&control_path),
     )?;
 
-    let (child, reader, writer, master) = spawn_ssh_pty(ssh_args, cols, rows).await?;
-    let child = Arc::new(Mutex::new(Some(child)));
-    let writer = Arc::new(Mutex::new(writer));
-    let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(master));
-
-    let (pty_tx, mut pty_rx) = mpsc::channel::<Vec<u8>>(16);
-    run_pty_reader_thread(reader, pty_tx);
-
-    let mut auth_rx = auth_prompts.register(session_id).await;
-
-    let auth_result = run_auth_until_ready(
-        app.clone(),
-        &mut auth_rx,
+    let AuthenticatedPty {
+        child,
+        writer,
+        master,
+        mut pty_rx,
+        host_key_pin,
+    } = authenticate_pty_with_host_trust(
+        &app,
+        auth_prompts,
         session_id,
+        host,
+        port,
         auth,
-        &log_path,
-        &mut pty_rx,
-        &writer,
-        Some(child.clone()),
-    )
-    .await;
-    auth_prompts.cancel(session_id).await;
-    finish_openssh_authentication(
-        child.clone(),
+        ssh_args,
+        log_path,
         Some(control_path.clone()),
-        auth_result,
-        "认证失败：公钥或密码未通过，且未完成二次验证（keyboard-interactive）",
+        cols,
+        rows,
     )
     .await?;
+
+    if let Some(pin) = &host_key_pin {
+        // 多路复用套接字失效时 OpenSSH 可能回退为新连接，子命令也必须绑定同一主机指纹。
+        if let Err(error) = pin
+            .apply(&mut sftp_prefix_args)
+            .and_then(|()| pin.apply(&mut ssh_mux_prefix_args))
+        {
+            reap_openssh_child(child, Some(control_path)).await?;
+            return Err(error);
+        }
+    }
 
     let sid = session_id.to_string();
     let app_emit = app.clone();
@@ -546,6 +653,7 @@ pub async fn connect_openssh(
         output_flow,
         lifecycle,
         child,
+        _host_key_pin: host_key_pin,
         control_path,
         sftp_prefix_args,
         ssh_mux_prefix_args,
@@ -583,34 +691,21 @@ pub async fn connect_openssh_test(
         None,
     )?;
 
-    let (child, reader, writer, _master) = spawn_ssh_pty(ssh_args, 80, 24).await?;
-    let child = Arc::new(Mutex::new(Some(child)));
-    let writer = Arc::new(Mutex::new(writer));
-
-    let (pty_tx, mut pty_rx) = mpsc::channel::<Vec<u8>>(16);
-    run_pty_reader_thread(reader, pty_tx);
-
-    let mut auth_rx = auth_prompts.register(session_id).await;
-
-    let auth_result = run_auth_until_ready(
-        app.clone(),
-        &mut auth_rx,
+    let authenticated = authenticate_pty_with_host_trust(
+        &app,
+        auth_prompts,
         session_id,
+        host,
+        port,
         auth,
-        &log_path,
-        &mut pty_rx,
-        &writer,
-        Some(child.clone()),
-    )
-    .await;
-    auth_prompts.cancel(session_id).await;
-    finish_openssh_authentication(
-        child.clone(),
+        ssh_args,
+        log_path,
         None,
-        auth_result,
-        "认证失败: 用户名或密码/密钥不正确",
+        80,
+        24,
     )
     .await?;
+    let child = authenticated.child.clone();
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
@@ -645,7 +740,15 @@ pub async fn connect_openssh_test(
 }
 
 fn temp_log_path() -> Result<String, String> {
+    use std::os::unix::fs::OpenOptionsExt;
     let p = std::env::temp_dir().join(format!("sshx-ssh-{}.log", uuid::Uuid::new_v4()));
+    // 先独占创建私有日志，主机信任流程只读取此本地 OpenSSH 日志。
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&p)
+        .map_err(|error| format!("创建 SSH 验证日志失败: {error}"))?;
     p.to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "临时日志路径无效".to_string())
@@ -903,10 +1006,8 @@ fn build_sftp_slave_prefix(
         "-o".to_string(),
         "HostKeyAlgorithms=+ssh-rsa".to_string(),
     ];
-    if port != 22 {
-        args.push("-P".to_string());
-        args.push(port.to_string());
-    }
+    args.push("-P".to_string());
+    args.push(port.to_string());
     match auth {
         AuthMethod::Password(_) => {
             args.push("-o".to_string());
@@ -946,10 +1047,8 @@ fn build_ssh_slave_prefix(
         "-o".to_string(),
         "HostKeyAlgorithms=+ssh-rsa".to_string(),
     ];
-    if port != 22 {
-        args.push("-p".to_string());
-        args.push(port.to_string());
-    }
+    args.push("-p".to_string());
+    args.push(port.to_string());
     match auth {
         AuthMethod::Password(_) => {
             args.push("-o".to_string());
@@ -980,17 +1079,18 @@ fn build_ssh_args(
     remote_command: Option<&str>,
     control_socket: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    // DEBUG1 ≈ ssh -v，确保 -E 日志里出现 Authentication succeeded / Authenticated to
-    // （VERBOSE 在部分版本下不足以写入这些行，导致堡垒机场景误判超时）。
+    // DEBUG3 记录 OpenSSH 原生主机查找结果，供首次信任流程区分完全未知与已有记录。
     let mut args = vec![
         "-o".to_string(),
         "StrictHostKeyChecking=yes".to_string(),
         "-E".to_string(),
         log_path.to_string(),
         "-o".to_string(),
-        "LogLevel=DEBUG1".to_string(),
-        // 与 LogLevel 叠加强制打开详细输出（与命令行 ssh -v 行为一致）
-        "-v".to_string(),
+        "LogLevel=DEBUG3".to_string(),
+        "-o".to_string(),
+        "FingerprintHash=sha256".to_string(),
+        // 保证主机验证日志不受用户 LogLevel 配置影响。
+        "-vvv".to_string(),
         "-tt".to_string(),
     ];
 
@@ -1015,10 +1115,8 @@ fn build_ssh_args(
         args.push(format!("ServerAliveCountMax={keepalive_max}"));
     }
 
-    if port != 22 {
-        args.push("-p".to_string());
-        args.push(port.to_string());
-    }
+    args.push("-p".to_string());
+    args.push(port.to_string());
 
     match auth {
         AuthMethod::Password(_) => {
@@ -1075,6 +1173,9 @@ async fn spawn_ssh_pty(
             .map_err(|e| e.to_string())?;
         let mut cmd = CommandBuilder::new(SSH_BIN);
         cmd.env("TERM", "xterm-256color");
+        // 主机验证只解析本地 OpenSSH 日志，固定语言确保错误分类不随系统区域改变。
+        cmd.env("LC_ALL", "C");
+        cmd.env("LANG", "C");
         for a in ssh_args {
             cmd.arg(a);
         }
@@ -1773,6 +1874,46 @@ mod tests {
     }
 
     #[test]
+    fn default_port_is_explicit_for_every_openssh_command() {
+        let auth = AuthMethod::Password("fake-password".into());
+        let commands = [
+            (
+                build_ssh_args(
+                    "example.test",
+                    22,
+                    "user",
+                    &auth,
+                    0,
+                    0,
+                    "/tmp/test.log",
+                    None,
+                    None,
+                )
+                .unwrap(),
+                "-p",
+            ),
+            (
+                build_ssh_slave_prefix("/tmp/test.sock", 22, "user", "example.test", &auth)
+                    .unwrap()
+                    .0,
+                "-p",
+            ),
+            (
+                build_sftp_slave_prefix("/tmp/test.sock", 22, "user", "example.test", &auth)
+                    .unwrap()
+                    .0,
+                "-P",
+            ),
+        ];
+        for (args, flag) in commands {
+            assert!(
+                args.windows(2).any(|pair| pair == [flag, "22"]),
+                "连接目标端口不得被系统配置覆盖: {args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn security_all_openssh_commands_require_verified_host_keys() {
         let auth = AuthMethod::Password("fake-test-password".into());
         let commands = [
@@ -1830,8 +1971,9 @@ mod tests {
         .unwrap();
         assert!(args.contains(&"-p".into()) && args.contains(&"2222".into()));
         assert!(args.iter().any(|a| a.contains("ServerAliveInterval=25")));
-        assert!(args.contains(&"-v".into()));
-        assert!(args.iter().any(|a| a.contains("LogLevel=DEBUG1")));
+        assert!(args.contains(&"-vvv".into()));
+        assert!(args.iter().any(|a| a == "LogLevel=DEBUG3"));
+        assert!(args.iter().any(|a| a == "FingerprintHash=sha256"));
         assert!(args
             .iter()
             .any(|a| a == "PreferredAuthentications=keyboard-interactive,password"));

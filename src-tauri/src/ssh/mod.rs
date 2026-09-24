@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 #[cfg(not(target_os = "macos"))]
 pub(crate) mod host_key;
+pub(crate) mod host_key_prompt;
 #[cfg(not(target_os = "macos"))]
 pub(crate) mod keyboard_interactive;
 pub mod manager;
