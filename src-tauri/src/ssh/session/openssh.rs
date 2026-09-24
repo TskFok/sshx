@@ -1,5 +1,6 @@
 //! macOS：使用系统 `/usr/bin/ssh` 与子进程 PTY，替代 russh 协议栈。
 
+use super::lifecycle::{SessionEndGuard, SessionLifecycle};
 use super::{OutputFlow, SessionCmd, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
@@ -20,12 +21,62 @@ const SCAN_MAX: usize = 65536;
 const SFTP_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SFTP_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 type ProgressProbe = Box<dyn FnMut() -> Option<u64> + Send>;
+type ChildHandle = Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>;
+
+async fn reap_openssh_child(
+    child: ChildHandle,
+    control_path: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let child = child.lock().map_err(|error| error.to_string())?.take();
+        let result = if let Some(mut child) = child {
+            // kill 只发送信号，wait 才真正回收进程；两者都在 blocking worker 中。
+            (|| {
+                if child.try_wait()?.is_none() {
+                    if let Err(error) = child.kill() {
+                        // kill 与自然退出可能竞态；仍在运行时不能无限等待。
+                        if child.try_wait()?.is_none() {
+                            return Err(error);
+                        }
+                    }
+                }
+                child.wait().map(|_| ())
+            })()
+        } else {
+            Ok(())
+        };
+        if let Some(control_path) = control_path {
+            let _ = std::fs::remove_file(control_path);
+        }
+        result.map_err(|error: std::io::Error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("回收 SSH 子进程任务失败: {error}"))?
+}
+
+async fn finish_openssh_authentication(
+    child: ChildHandle,
+    control_path: Option<String>,
+    outcome: Result<bool, String>,
+    rejected_message: &str,
+) -> Result<(), String> {
+    let error = match outcome {
+        Ok(true) => return Ok(()),
+        Ok(false) => rejected_message.to_string(),
+        Err(error) => error,
+    };
+    if let Err(cleanup_error) = reap_openssh_child(child, control_path).await {
+        return Err(format!("{error}；回收 SSH 子进程失败: {cleanup_error}"));
+    }
+    Err(error)
+}
 
 pub struct SshSession {
     pub id: String,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     output_flow: Arc<OutputFlow>,
-    child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    lifecycle: SessionLifecycle,
+    child: ChildHandle,
     /// OpenSSH 多路复用控制套接字（用于 `sftp` 复用已认证连接）。
     control_path: String,
     /// `/usr/bin/sftp` 参数（含 ControlPath、StrictHostKey 等，不含 `-b` 与目标）。
@@ -57,12 +108,14 @@ impl SshSession {
         self.output_flow.ack(bytes);
     }
 
+    pub fn closed_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.lifecycle.subscribe()
+    }
+
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.output_flow.close();
-        if let Some(mut ch) = self.child.lock().ok().and_then(|mut g| g.take()) {
-            let _ = ch.kill();
-        }
-        let _ = std::fs::remove_file(&self.control_path);
+        self.lifecycle.finish();
+        reap_openssh_child(self.child.clone(), Some(self.control_path.clone())).await?;
         Ok(())
     }
 
@@ -73,6 +126,7 @@ impl SshSession {
             id: id.to_string(),
             cmd_tx,
             output_flow: Arc::new(OutputFlow::new(false)),
+            lifecycle: SessionLifecycle::new(),
             child: Arc::new(Mutex::new(None)),
             control_path: format!("/tmp/sshx-test-control-{id}"),
             sftp_prefix_args: Vec::new(),
@@ -399,7 +453,7 @@ pub async fn connect_openssh(
 
     let mut auth_rx = auth_prompts.register(session_id).await;
 
-    let authed = match run_auth_until_ready(
+    let auth_result = run_auth_until_ready(
         app.clone(),
         &mut auth_rx,
         session_id,
@@ -409,32 +463,22 @@ pub async fn connect_openssh(
         &writer,
         Some(child.clone()),
     )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            auth_prompts.cancel(session_id).await;
-            if let Some(mut ch) = child.lock().ok().and_then(|mut g| g.take()) {
-                let _ = ch.kill();
-            }
-            return Err(e);
-        }
-    };
+    .await;
     auth_prompts.cancel(session_id).await;
-
-    if !authed {
-        if let Some(mut ch) = child.lock().ok().and_then(|mut g| g.take()) {
-            let _ = ch.kill();
-        }
-        return Err(
-            "认证失败：公钥或密码未通过，且未完成二次验证（keyboard-interactive）".to_string(),
-        );
-    }
+    finish_openssh_authentication(
+        child.clone(),
+        Some(control_path.clone()),
+        auth_result,
+        "认证失败：公钥或密码未通过，且未完成二次验证（keyboard-interactive）",
+    )
+    .await?;
 
     let sid = session_id.to_string();
     let app_emit = app.clone();
     let output_flow = Arc::new(OutputFlow::new(output_flow_control));
     let output_flow_loop = output_flow.clone();
+    let lifecycle = SessionLifecycle::new();
+    let end_guard = SessionEndGuard::new(lifecycle.clone());
     let writer_loop = writer.clone();
     let master_loop = master.clone();
 
@@ -472,6 +516,7 @@ pub async fn connect_openssh(
     });
 
     tokio::spawn(async move {
+        let _end_guard = end_guard;
         if !output_flow_loop.reserve(0).await {
             return;
         }
@@ -499,6 +544,7 @@ pub async fn connect_openssh(
         id: session_id.to_string(),
         cmd_tx,
         output_flow,
+        lifecycle,
         child,
         control_path,
         sftp_prefix_args,
@@ -546,7 +592,7 @@ pub async fn connect_openssh_test(
 
     let mut auth_rx = auth_prompts.register(session_id).await;
 
-    let authed = match run_auth_until_ready(
+    let auth_result = run_auth_until_ready(
         app.clone(),
         &mut auth_rx,
         session_id,
@@ -556,32 +602,20 @@ pub async fn connect_openssh_test(
         &writer,
         Some(child.clone()),
     )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            auth_prompts.cancel(session_id).await;
-            if let Some(mut ch) = child.lock().ok().and_then(|mut g| g.take()) {
-                let _ = ch.kill();
-            }
-            return Err(e);
-        }
-    };
+    .await;
     auth_prompts.cancel(session_id).await;
-
-    if !authed {
-        if let Some(mut ch) = child.lock().ok().and_then(|mut g| g.take()) {
-            let _ = ch.kill();
-        }
-        return Err("认证失败: 用户名或密码/密钥不正确".to_string());
-    }
+    finish_openssh_authentication(
+        child.clone(),
+        None,
+        auth_result,
+        "认证失败: 用户名或密码/密钥不正确",
+    )
+    .await?;
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         if tokio::time::Instant::now() > deadline {
-            if let Some(mut ch) = child.lock().ok().and_then(|mut g| g.take()) {
-                let _ = ch.kill();
-            }
+            reap_openssh_child(child.clone(), None).await?;
             return Err("等待测试会话结束超时".to_string());
         }
         let wait_out = tokio::task::spawn_blocking({
@@ -1518,6 +1552,166 @@ fn clear_mfa_window(scan: &mut String) {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[tokio::test]
+    async fn manager_ack_still_releases_only_the_active_sessions_output_window() {
+        let manager = crate::ssh::manager::SessionManager::new();
+        let mut session = SshSession::new_test("active-ack");
+        session.output_flow = Arc::new(OutputFlow::new(true));
+        let flow = session.output_flow.clone();
+        manager.add_session(session).await;
+        manager.ready_output("active-ack").await.unwrap();
+        assert!(flow.reserve(super::super::SSH_OUTPUT_WINDOW_BYTES).await);
+        manager
+            .ack_output("other-ended-session", 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            flow.state.borrow().in_flight,
+            super::super::SSH_OUTPUT_WINDOW_BYTES
+        );
+        manager.ack_output("active-ack", 17).await.unwrap();
+        assert_eq!(
+            flow.state.borrow().in_flight,
+            super::super::SSH_OUTPUT_WINDOW_BYTES - 17
+        );
+        assert!(flow.reserve(17).await);
+        manager.disconnect("active-ack").await.unwrap();
+    }
+
+    #[derive(Debug)]
+    struct ReapedChild {
+        child: std::process::Child,
+        reaped: Arc<AtomicBool>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct UnkillableChild {
+        waited: Arc<AtomicBool>,
+    }
+
+    impl portable_pty::ChildKiller for UnkillableChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "kill denied",
+            ))
+        }
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    impl portable_pty::Child for UnkillableChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            Ok(None)
+        }
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            self.waited.store(true, Ordering::SeqCst);
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_kill_does_not_wait_forever_for_a_running_child() {
+        let waited = Arc::new(AtomicBool::new(false));
+        let child: ChildHandle = Arc::new(Mutex::new(Some(Box::new(UnkillableChild {
+            waited: waited.clone(),
+        }))));
+        assert_eq!(
+            reap_openssh_child(child, None).await,
+            Err("kill denied".to_string())
+        );
+        assert!(!waited.load(Ordering::SeqCst));
+    }
+
+    impl portable_pty::ChildKiller for ReapedChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.child.kill()
+        }
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            portable_pty::ChildKiller::clone_killer(&self.child)
+        }
+    }
+
+    impl portable_pty::Child for ReapedChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            portable_pty::Child::try_wait(&mut self.child)
+        }
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            let result = portable_pty::Child::wait(&mut self.child);
+            self.reaped.store(result.is_ok(), Ordering::SeqCst);
+            result
+        }
+        fn process_id(&self) -> Option<u32> {
+            Some(self.child.id())
+        }
+    }
+
+    #[tokio::test]
+    async fn close_waits_for_child_and_removes_control_path() {
+        let mut session = SshSession::new_test("child-reap");
+        session.control_path = std::env::temp_dir()
+            .join(format!("sshx-reap-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&session.control_path, "test control path").unwrap();
+        let reaped = Arc::new(AtomicBool::new(false));
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        *session.child.lock().unwrap() = Some(Box::new(ReapedChild {
+            child,
+            reaped: reaped.clone(),
+        }));
+
+        session.close().await.unwrap();
+        assert!(reaped.load(Ordering::SeqCst));
+        assert!(session.child.lock().unwrap().is_none());
+        assert!(!std::path::Path::new(&session.control_path).exists());
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_authentication_reaps_child_and_cleans_control_path() {
+        for outcome in [Err("认证超时".to_string()), Ok(false)] {
+            let mut session = SshSession::new_test("failed-auth-reap");
+            session.control_path = std::env::temp_dir()
+                .join(format!("sshx-auth-reap-{}", uuid::Uuid::new_v4()))
+                .to_string_lossy()
+                .into_owned();
+            std::fs::write(&session.control_path, "test control path").unwrap();
+            let reaped = Arc::new(AtomicBool::new(false));
+            let child = std::process::Command::new("/bin/sleep")
+                .arg("60")
+                .spawn()
+                .unwrap();
+            *session.child.lock().unwrap() = Some(Box::new(ReapedChild {
+                child,
+                reaped: reaped.clone(),
+            }));
+            let expected = outcome
+                .clone()
+                .err()
+                .unwrap_or_else(|| "认证被拒绝".to_string());
+
+            let result = finish_openssh_authentication(
+                session.child.clone(),
+                Some(session.control_path.clone()),
+                outcome,
+                "认证被拒绝",
+            )
+            .await;
+            assert_eq!(result, Err(expected));
+            assert!(reaped.load(Ordering::SeqCst));
+            assert!(session.child.lock().unwrap().is_none());
+            assert!(!std::path::Path::new(&session.control_path).exists());
+        }
+    }
 
     struct TrackedReader {
         data: Arc<Vec<u8>>,

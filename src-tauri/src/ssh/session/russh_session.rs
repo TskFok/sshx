@@ -1,3 +1,4 @@
+use super::lifecycle::{SessionEndGuard, SessionLifecycle};
 use super::{OutputFlow, SessionCmd, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
@@ -18,6 +19,7 @@ pub struct SshSession {
     pub channel_id: ChannelId,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     output_flow: Arc<OutputFlow>,
+    lifecycle: SessionLifecycle,
 }
 
 impl SshSession {
@@ -42,8 +44,11 @@ impl SshSession {
         let sid = id.clone();
         let output_flow = Arc::new(OutputFlow::new(output_flow_control));
         let output_flow_loop = output_flow.clone();
+        let lifecycle = SessionLifecycle::new();
+        let end_guard = SessionEndGuard::new(lifecycle.clone());
 
         tokio::spawn(async move {
+            let _end_guard = end_guard;
             enum PendingOutput {
                 Data { bytes: Vec<u8>, offset: usize },
                 Close,
@@ -155,6 +160,7 @@ impl SshSession {
             channel_id,
             cmd_tx,
             output_flow,
+            lifecycle,
         })
     }
 
@@ -178,8 +184,13 @@ impl SshSession {
         self.output_flow.ack(bytes);
     }
 
+    pub fn closed_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.lifecycle.subscribe()
+    }
+
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.output_flow.close();
+        self.lifecycle.finish();
         self.handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
             .await?;

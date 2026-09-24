@@ -23,6 +23,8 @@ import {
   FileTransferConnectionPicker,
   FileTransferPage,
   HistoryRow,
+  TransferHistoryFallbackRow,
+  TransferPageErrorAlerts,
 } from "./FileTransferPage";
 
 const connection: ConnectionInfo = {
@@ -174,6 +176,92 @@ describe("FileTransferPage", () => {
     );
 
     expect(html).toContain("-rw-------");
+  });
+
+  it("传输进度只覆盖目标行的显示大小，不修改目录条目", () => {
+    const entries = [
+      { name: "target.bin", path: "/tmp/target.bin", isDirectory: false, size: 0 },
+      { name: "other.bin", path: "/tmp/other.bin", isDirectory: false, size: 12 },
+    ];
+    const html = renderToStaticMarkup(
+      React.createElement(FilePanel, {
+        title: "本地文件",
+        icon: Server,
+        snapshot: { cwd: "/tmp", entries },
+        sizeOverlay: { targetDir: "/tmp", fileName: "target.bin", bytesTransferred: 8 },
+        loading: false,
+        selectedPaths: [],
+        pathValue: "/tmp",
+        onPathChange: () => {},
+        onPathSubmit: () => {},
+        pathDisabled: false,
+        pathSubmitDisabled: false,
+        searchValue: "",
+        onSearchChange: () => {},
+        onSelect: () => {},
+        onRefresh: () => {},
+        onParent: () => {},
+        parentDisabled: false,
+        footer: null,
+      })
+    );
+
+    expect(html).toMatch(/target\.bin<\/span><span[^>]*>8 B<\/span>/);
+    expect(html).toMatch(/other\.bin<\/span><span[^>]*>12 B<\/span>/);
+    expect(entries[0].size).toBe(0);
+  });
+
+  it("历史刷新失败时用最后终态显示取消消息", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TransferHistoryFallbackRow, {
+        transfer: {
+          id: "transfer-1", direction: "download", fileName: "large.bin",
+          localDir: "/tmp", remoteDir: "/srv", totalBytes: 16,
+        },
+        progress: {
+          transferId: "transfer-1", direction: "download", bytesTransferred: 8,
+          totalBytes: 16, speedBps: 4, progress: 50, status: "failed",
+          message: "传输已中断",
+        },
+        onLocalDir: () => {},
+        onRemoteDir: () => {},
+      })
+    );
+    expect(html).toContain("已中断");
+    expect(html).toContain("large.bin");
+    expect(html).toContain("传输已中断");
+  });
+
+  it("历史回退行使用事件报告的实际文件大小", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TransferHistoryFallbackRow, {
+        transfer: {
+          id: "transfer-2", direction: "upload", fileName: "unknown.bin",
+          localDir: "/tmp", remoteDir: "/srv", totalBytes: 0,
+        },
+        progress: {
+          transferId: "transfer-2", direction: "upload", bytesTransferred: 16,
+          totalBytes: 16, speedBps: 4, progress: 100, status: "success", message: null,
+        },
+        onLocalDir: () => {},
+        onRemoteDir: () => {},
+      })
+    );
+    expect(html).toContain("16 B");
+  });
+
+  it("旧传输错误存在时仍显示新的历史刷新错误", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TransferPageErrorAlerts, {
+        connectionError: "传输已中断",
+        historyError: "刷新传输历史失败：数据库忙",
+        phase: "connected",
+        onReconnect: () => {},
+      })
+    );
+    expect(html).toContain("传输已中断");
+    expect(html).toContain("刷新传输历史失败：数据库忙");
+    expect(html.match(/role="alert"/g)).toHaveLength(2);
   });
 
   it("连接不可用时禁用远程文件面板交互", () => {

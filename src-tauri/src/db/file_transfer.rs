@@ -141,6 +141,158 @@ pub fn list_for_connection(
 mod tests {
     use super::*;
     use crate::db::create_test_db;
+    use std::time::Instant;
+
+    fn seed_history(conn: &Connection, row_count: i64) {
+        conn.execute_batch(
+            "INSERT INTO connections (id, name, host, port, username, auth_type, created_at, updated_at)
+             VALUES ('c1', 'One', 'one.example.com', 22, 'root', 'password', 1, 1),
+                    ('c2', 'Two', 'two.example.com', 22, 'root', 'password', 1, 1);",
+        ).unwrap();
+        conn.execute(
+            "WITH RECURSIVE seq(n) AS (
+                 SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?1
+             )
+             INSERT INTO file_transfer_history (
+                 id, connection_id, direction, local_path, local_dir, remote_path, remote_dir,
+                 file_name, total_bytes, status, started_at
+             )
+             SELECT 't' || n,
+                    CASE WHEN n % 4 = 0 THEN 'c2' ELSE 'c1' END,
+                    'upload', '/tmp/a', '/tmp', '/remote/a', '/remote', 'a', 128,
+                    'success', n / 3
+             FROM seq",
+            [row_count],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn history_query_uses_connection_started_index_without_temp_sort() {
+        let conn = create_test_db();
+        let plan: Vec<String> = conn
+            .prepare("EXPLAIN QUERY PLAN SELECT id, connection_id, direction, local_path, local_dir, remote_path, remote_dir, file_name, total_bytes, status, error_message, started_at, ended_at, duration_ms, average_speed_bps FROM file_transfer_history WHERE connection_id = ?1 ORDER BY started_at DESC LIMIT ?2")
+            .unwrap()
+            .query_map(params!["c1", 10], |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.contains(
+                "SEARCH file_transfer_history USING INDEX idx_transfer_history_connection_started"
+            )),
+            "{plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("USE TEMP B-TREE FOR ORDER BY")),
+            "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn history_query_limits_and_isolates_connections_in_descending_time_order() {
+        let conn = create_test_db();
+        seed_history(&conn, 1000);
+
+        let first = list_for_connection(&conn, "c1", 2).unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].id, "t999");
+        assert_eq!(first[0].started_at, 333);
+        assert_eq!(first[1].started_at, 332);
+        assert!(first.iter().all(|row| row.connection_id == "c1"));
+
+        let other = list_for_connection(&conn, "c2", 1).unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].id, "t1000");
+        assert_eq!(other[0].started_at, 333);
+        assert!(list_for_connection(&conn, "missing", 10)
+            .unwrap()
+            .is_empty());
+        assert!(list_for_connection(&conn, "c1", 0).unwrap().is_empty());
+
+        let ties = list_for_connection(&conn, "c1", 10).unwrap();
+        let tied_ids: std::collections::HashSet<&str> = ties
+            .iter()
+            .filter(|row| row.started_at == 332)
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(tied_ids, std::collections::HashSet::from(["t997", "t998"]));
+        assert!(ties
+            .windows(2)
+            .all(|pair| pair[0].started_at >= pair[1].started_at));
+    }
+
+    #[test]
+    fn history_query_keeps_limit_isolation_and_timestamp_ties_at_100k_rows() {
+        let conn = create_test_db();
+        seed_history(&conn, 100_000);
+
+        let first = list_for_connection(&conn, "c1", 3).unwrap();
+        assert_eq!(first.len(), 3);
+        assert_eq!(first[0].id, "t99999");
+        assert_eq!(first[0].started_at, 33_333);
+        assert!(first.iter().all(|row| row.connection_id == "c1"));
+        assert!(first
+            .windows(2)
+            .all(|pair| pair[0].started_at >= pair[1].started_at));
+        let tied_ids: std::collections::HashSet<&str> = first
+            .iter()
+            .filter(|row| row.started_at == 33_332)
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(
+            tied_ids,
+            std::collections::HashSet::from(["t99997", "t99998"])
+        );
+
+        let other = list_for_connection(&conn, "c2", 1).unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].id, "t100000");
+        assert_eq!(other[0].started_at, 33_333);
+        assert_eq!(other[0].connection_id, "c2");
+    }
+
+    #[test]
+    #[ignore = "release benchmark; run with --ignored --nocapture"]
+    fn benchmark_history_query_index_before_after() {
+        const RUNS: usize = 120;
+        for row_count in [1_000, 100_000] {
+            let conn = create_test_db();
+            seed_history(&conn, row_count);
+            for indexed in [false, true] {
+                if !indexed {
+                    conn.execute("DROP INDEX idx_transfer_history_connection_started", [])
+                        .unwrap();
+                } else {
+                    conn.execute("CREATE INDEX idx_transfer_history_connection_started ON file_transfer_history(connection_id, started_at DESC)", []).unwrap();
+                }
+                let plan: Vec<String> = conn
+                    .prepare("EXPLAIN QUERY PLAN SELECT id, connection_id, direction, local_path, local_dir, remote_path, remote_dir, file_name, total_bytes, status, error_message, started_at, ended_at, duration_ms, average_speed_bps FROM file_transfer_history WHERE connection_id = ?1 ORDER BY started_at DESC LIMIT ?2")
+                    .unwrap()
+                    .query_map(params!["c1", 100], |row| row.get(3))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                for _ in 0..10 {
+                    assert_eq!(list_for_connection(&conn, "c1", 100).unwrap().len(), 100);
+                }
+                let mut elapsed_us = Vec::with_capacity(RUNS);
+                for _ in 0..RUNS {
+                    let start = Instant::now();
+                    let rows = list_for_connection(&conn, "c1", 100).unwrap();
+                    std::hint::black_box(rows);
+                    elapsed_us.push(start.elapsed().as_micros());
+                }
+                println!(
+                    "history_query rows={row_count} indexed={indexed} samples_us={elapsed_us:?}"
+                );
+                elapsed_us.sort_unstable();
+                println!("history_query rows={row_count} indexed={indexed} runs={RUNS} p50_us={} p95_us={} plan={plan:?}", elapsed_us[RUNS / 2], elapsed_us[RUNS * 95 / 100]);
+            }
+        }
+    }
 
     #[test]
     fn insert_update_and_list_history() {

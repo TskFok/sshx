@@ -139,6 +139,26 @@ describe("终端输出流量控制", () => {
     expect(onClose).toHaveBeenCalledExactlyOnceWith({ reason: "remote" });
   });
 
+  it("尾包 ACK 在远端关闭后失败，不再产生第二次断线提示", async () => {
+    vi.useFakeTimers();
+    const term = new Terminal();
+    disposables.push(() => term.dispose());
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    let rejectAck!: (error: Error) => void;
+    transport.invoke.mockImplementation((command) => command === "ssh_ack_output"
+      ? new Promise<void>((_resolve, reject) => { rejectAck = reject; })
+      : Promise.resolve());
+    disposables.push(await attachTerminalOutput(term, "closing", onClose, onError));
+    emit("ssh-data-closing", [65]);
+    await vi.runAllTimersAsync();
+    emit("ssh-close-closing", { reason: "remote" });
+    rejectAck(new Error("already closed"));
+    await Promise.resolve();
+    expect(onClose).toHaveBeenCalledExactlyOnceWith({ reason: "remote" });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("64 MiB 连续文本在确认窗口内完整处理，结束后仍能输出提示符", async () => {
     const term = new Terminal({ scrollback: 1000 });
     disposables.push(() => term.dispose());

@@ -36,15 +36,24 @@ import {
   filterFileEntriesBySearch,
   formatTransferBytes,
   formatTransferSpeed,
-  mergeTransferProgress,
   resolveFileOverwriteDecision,
   resolveTransferDisplayBytes,
   toggleSelectedFilePath,
-  updateSnapshotEntrySizeFromProgress,
   type TransferDirection,
   type TransferProgressMap,
   type TransferProgressPayload,
 } from "@/lib/fileTransfer";
+import {
+  createOwnedTransferProgressHandler,
+  createTransferBatchGate,
+  createTransferPlaceholderEntry,
+  finalizeTransferProgress,
+  insertTransferPlaceholder,
+  retainTransferProgress,
+  rollbackInsertedTransferEntry,
+  settleTransferHistory,
+  subscribeTransferProgress,
+} from "@/lib/fileTransferProgress";
 import {
   canUseFileTransferSession,
   getFileTransferDisconnectMessage,
@@ -159,6 +168,8 @@ export function FileTransferPage({
   const { connectionId: routeConnectionId } = useParams<{ connectionId: string }>();
   const connectionId =
     providedConnectionId === undefined ? routeConnectionId : providedConnectionId;
+  const currentConnectionIdRef = useRef(connectionId ?? null);
+  currentConnectionIdRef.current = connectionId ?? null;
   const layoutClasses = getFilePanelLayoutClasses();
   const historyLayoutClasses = getFileTransferHistoryLayoutClasses();
   const connections = useAppStore((s) => s.connections);
@@ -197,7 +208,10 @@ export function FileTransferPage({
   const [selectedRemotePaths, setSelectedRemotePaths] = useState<string[]>([]);
   const [history, setHistory] = useState<FileTransferHistory[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [fallbackTransfer, setFallbackTransfer] = useState<ActiveTransfer | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
+  const transferBatchGateRef = useRef(createTransferBatchGate());
   const [activeTransfer, setActiveTransfer] = useState<ActiveTransfer | null>(null);
   const activeTransferRef = useRef<ActiveTransfer | null>(null);
   const [cancelingTransferId, setCancelingTransferId] = useState<string | null>(null);
@@ -271,7 +285,7 @@ export function FileTransferPage({
   }, [setConnections, setGroups]);
 
   const loadLocalDir = useCallback(
-    async (path?: string | null, options?: { keepSearch?: boolean }) => {
+    async (path?: string | null, options?: { keepSearch?: boolean }): Promise<boolean> => {
       setLocalLoading(true);
       if (!options?.keepSearch) {
         setLocalSearch("");
@@ -282,8 +296,10 @@ export function FileTransferPage({
         });
         setLocalSnapshot(snapshot);
         setSelectedLocalPaths([]);
+        return true;
       } catch (error) {
         setConnectionError(typeof error === "string" ? error : String(error));
+        return false;
       } finally {
         setLocalLoading(false);
       }
@@ -315,10 +331,10 @@ export function FileTransferPage({
       }
 
       activeTransferRef.current = null;
+      transferBatchGateRef.current.interrupt();
       sessionIdRef.current = null;
       sessionConnectionIdRef.current = null;
       setActiveTransfer(null);
-      setTransferBusy(false);
       setCancelingTransferId(null);
       setSessionId(null);
       setRemoteLoading(false);
@@ -331,7 +347,7 @@ export function FileTransferPage({
   );
 
   const loadRemoteDirForSession = useCallback(
-    async (targetSessionId: string, path: string, options?: { keepSearch?: boolean }) => {
+    async (targetSessionId: string, path: string, options?: { keepSearch?: boolean }): Promise<boolean> => {
       setRemoteLoading(true);
       if (!options?.keepSearch) {
         setRemoteSearch("");
@@ -344,10 +360,11 @@ export function FileTransferPage({
           }
         );
         if (sessionIdRef.current !== targetSessionId) {
-          return;
+          return false;
         }
         setRemoteSnapshot(snapshot);
         setSelectedRemotePaths([]);
+        return true;
       } catch (error) {
         if (sessionIdRef.current === targetSessionId) {
           const message =
@@ -358,6 +375,7 @@ export function FileTransferPage({
             setConnectionError(message);
           }
         }
+        return false;
       } finally {
         if (sessionIdRef.current === targetSessionId) {
           setRemoteLoading(false);
@@ -368,26 +386,38 @@ export function FileTransferPage({
   );
 
   const loadRemoteDir = useCallback(
-    async (path: string, options?: { keepSearch?: boolean }) => {
+    async (path: string, options?: { keepSearch?: boolean }): Promise<boolean> => {
       const currentSessionId = sessionIdRef.current;
-      if (!currentSessionId) return;
-      await loadRemoteDirForSession(currentSessionId, path, options);
+      if (!currentSessionId) return false;
+      return loadRemoteDirForSession(currentSessionId, path, options);
     },
     [loadRemoteDirForSession]
   );
 
-  const loadHistory = useCallback(async () => {
-    if (!connectionId) return;
+  const loadHistory = useCallback(async (): Promise<boolean | null> => {
+    if (!connectionId || pageDisposedRef.current || currentConnectionIdRef.current !== connectionId) return null;
     setHistoryLoading(true);
     try {
       const rows = await invoke<FileTransferHistory[]>("file_transfer_list_history", {
         request: { connectionId, limit: 100 },
       });
+      if (pageDisposedRef.current || currentConnectionIdRef.current !== connectionId) return null;
       setHistory(rows);
-    } catch {
-      // 历史失败不阻断目录操作。
+      setHistoryError(null);
+      setFallbackTransfer(null);
+      setProgressMap((current) => retainTransferProgress(
+        current,
+        new Set(activeTransferRef.current ? [activeTransferRef.current.id] : [])
+      ));
+      return true;
+    } catch (error) {
+      if (pageDisposedRef.current || currentConnectionIdRef.current !== connectionId) return null;
+      setHistoryError(`刷新传输历史失败：${typeof error === "string" ? error : String(error)}`);
+      return false;
     } finally {
-      setHistoryLoading(false);
+      if (!pageDisposedRef.current && currentConnectionIdRef.current === connectionId) {
+        setHistoryLoading(false);
+      }
     }
   }, [connectionId]);
 
@@ -461,46 +491,13 @@ export function FileTransferPage({
   }, [connectionId, connections.length, connection]);
 
   useEffect(() => {
-    let unlistenProgress: UnlistenFn | null = null;
-    void listen<TransferProgressPayload>("file-transfer-progress", (event) => {
-      const progress = event.payload;
-      setProgressMap((current) => mergeTransferProgress(current, progress));
-
-      const transfer = activeTransferRef.current;
-      if (
-        !transfer ||
-        transfer.id !== progress.transferId ||
-        progress.status === "failed"
-      ) {
-        return;
-      }
-
-      const nextSize =
-        progress.status === "success" ? progress.totalBytes : progress.bytesTransferred;
-      if (transfer.direction === "upload") {
-        setRemoteSnapshot((snapshot) =>
-          updateSnapshotEntrySizeFromProgress(snapshot, {
-            fileName: transfer.fileName,
-            targetDir: transfer.remoteDir,
-            bytesTransferred: nextSize,
-            pathSeparator: "/",
-          })
-        );
-      } else {
-        setLocalSnapshot((snapshot) =>
-          updateSnapshotEntrySizeFromProgress(snapshot, {
-            fileName: transfer.fileName,
-            targetDir: transfer.localDir,
-            bytesTransferred: nextSize,
-          })
-        );
-      }
-    }).then((unlisten) => {
-      unlistenProgress = unlisten;
+    const onProgress = createOwnedTransferProgressHandler(
+      () => activeTransferRef.current?.id ?? null,
+      setProgressMap
+    );
+    return subscribeTransferProgress(onProgress, (error) => {
+      setConnectionError(typeof error === "string" ? error : String(error));
     });
-    return () => {
-      unlistenProgress?.();
-    };
   }, []);
 
   useEffect(() => {
@@ -552,6 +549,7 @@ export function FileTransferPage({
     const activeSessionId = sessionIdRef.current;
     const activeTransfer = activeTransferRef.current;
     pendingConnectionIdRef.current = targetConnectionId;
+    transferBatchGateRef.current.interrupt();
 
     if (activeTransfer) {
       invoke("file_transfer_cancel", {
@@ -559,7 +557,6 @@ export function FileTransferPage({
       }).catch(() => {});
       activeTransferRef.current = null;
       setActiveTransfer(null);
-      setTransferBusy(false);
       setCancelingTransferId(null);
     }
     if (activeSessionId) {
@@ -711,6 +708,7 @@ export function FileTransferPage({
 
     void connect();
     return () => {
+      transferBatchGateRef.current.interrupt();
       connectionAttemptRef.current += 1;
       if (pendingConnectionIdRef.current === targetConnectionId) {
         pendingConnectionIdRef.current = null;
@@ -725,7 +723,6 @@ export function FileTransferPage({
         }).catch(() => {});
         activeTransferRef.current = null;
         setActiveTransfer(null);
-        setTransferBusy(false);
         setCancelingTransferId(null);
       }
 
@@ -760,12 +757,14 @@ export function FileTransferPage({
     ) {
       return;
     }
+    const batchToken = transferBatchGateRef.current.start();
+    if (batchToken === null) return;
     setTransferBusy(true);
     const remoteDir = remoteSnapshot.cwd;
     const localDir = localSnapshot?.cwd ?? "";
-    let wasCancelled = false;
     try {
       for (const file of selectedLocalFiles) {
+        if (!transferBatchGateRef.current.canContinue(batchToken) || sessionIdRef.current !== sessionId) break;
         const overwriteDecision = await resolveFileOverwriteDecision({
           entries: remoteSnapshot.entries,
           fileName: file.name,
@@ -778,10 +777,12 @@ export function FileTransferPage({
               cancelLabel: "取消",
             }),
         });
+        if (!transferBatchGateRef.current.canContinue(batchToken) || sessionIdRef.current !== sessionId) break;
         if (!overwriteDecision.shouldContinue) {
           continue;
         }
 
+        const placeholder = createTransferPlaceholderEntry(remoteDir, file.name, "/");
         const transferId = generateId();
         const nextTransfer: ActiveTransfer = {
           id: transferId,
@@ -793,6 +794,11 @@ export function FileTransferPage({
         };
         activeTransferRef.current = nextTransfer;
         setActiveTransfer(nextTransfer);
+        setFallbackTransfer(null);
+        setProgressMap((current) => retainTransferProgress(current, new Set()));
+        setRemoteSnapshot((snapshot) => insertTransferPlaceholder(snapshot, remoteDir, placeholder));
+        let completionStatus: "success" | "failed" = "success";
+        let completionMessage: string | null = null;
         try {
           await invoke("file_transfer_upload", {
             request: {
@@ -806,28 +812,50 @@ export function FileTransferPage({
           });
         } catch (error) {
           const message = typeof error === "string" ? error : String(error);
+          completionStatus = "failed";
+          completionMessage = message;
           if (message === TRANSFER_CANCELLED_MESSAGE) {
-            wasCancelled = true;
             break;
           }
           if (isFileTransferSessionUnavailableError(error)) {
-            wasCancelled = true;
             markSessionDisconnected(message, sessionId);
             break;
           }
-          setConnectionError(message);
+          if (transferBatchGateRef.current.canContinue(batchToken)) setConnectionError(message);
+        } finally {
+          if (activeTransferRef.current?.id === transferId) {
+            activeTransferRef.current = null;
+          }
+          setActiveTransfer((current) => current?.id === transferId ? null : current);
+          setCancelingTransferId(null);
+          let directoryLoaded = false;
+          if (transferBatchGateRef.current.canContinue(batchToken) && sessionIdRef.current === sessionId) {
+            directoryLoaded = await loadRemoteDir(remoteDir, { keepSearch: true });
+          }
+          if (!directoryLoaded) {
+            setRemoteSnapshot((snapshot) =>
+              rollbackInsertedTransferEntry(snapshot, remoteDir, placeholder)
+            );
+          }
+          await settleTransferHistory(connectionId, () =>
+            pageDisposedRef.current ? null : currentConnectionIdRef.current,
+          loadHistory, (historyLoaded) => {
+            if (completionMessage) setConnectionError(completionMessage);
+            setFallbackTransfer(historyLoaded ? null : nextTransfer);
+            setProgressMap((current) => finalizeTransferProgress(current, {
+              transferId, direction: "upload", totalBytes: nextTransfer.totalBytes,
+              status: completionStatus, message: completionMessage,
+            }, historyLoaded));
+          });
         }
       }
-
-      if (!wasCancelled) {
-        await loadRemoteDir(remoteDir);
-      }
-      await loadHistory();
     } finally {
-      setTransferBusy(false);
-      setCancelingTransferId(null);
-      activeTransferRef.current = null;
-      setActiveTransfer(null);
+      if (transferBatchGateRef.current.finish(batchToken)) {
+        setTransferBusy(false);
+        setCancelingTransferId(null);
+        activeTransferRef.current = null;
+        setActiveTransfer(null);
+      }
     }
   };
 
@@ -841,12 +869,14 @@ export function FileTransferPage({
     ) {
       return;
     }
+    const batchToken = transferBatchGateRef.current.start();
+    if (batchToken === null) return;
     setTransferBusy(true);
     const localDir = localSnapshot.cwd;
     const remoteDir = remoteSnapshot?.cwd ?? "";
-    let wasCancelled = false;
     try {
       for (const file of selectedRemoteFiles) {
+        if (!transferBatchGateRef.current.canContinue(batchToken) || sessionIdRef.current !== sessionId) break;
         const overwriteDecision = await resolveFileOverwriteDecision({
           entries: localSnapshot.entries,
           fileName: file.name,
@@ -859,10 +889,12 @@ export function FileTransferPage({
               cancelLabel: "取消",
             }),
         });
+        if (!transferBatchGateRef.current.canContinue(batchToken) || sessionIdRef.current !== sessionId) break;
         if (!overwriteDecision.shouldContinue) {
           continue;
         }
 
+        const placeholder = createTransferPlaceholderEntry(localDir, file.name);
         const transferId = generateId();
         const nextTransfer: ActiveTransfer = {
           id: transferId,
@@ -874,6 +906,11 @@ export function FileTransferPage({
         };
         activeTransferRef.current = nextTransfer;
         setActiveTransfer(nextTransfer);
+        setFallbackTransfer(null);
+        setProgressMap((current) => retainTransferProgress(current, new Set()));
+        setLocalSnapshot((snapshot) => insertTransferPlaceholder(snapshot, localDir, placeholder));
+        let completionStatus: "success" | "failed" = "success";
+        let completionMessage: string | null = null;
         try {
           await invoke("file_transfer_download", {
             request: {
@@ -887,28 +924,50 @@ export function FileTransferPage({
           });
         } catch (error) {
           const message = typeof error === "string" ? error : String(error);
+          completionStatus = "failed";
+          completionMessage = message;
           if (message === TRANSFER_CANCELLED_MESSAGE) {
-            wasCancelled = true;
             break;
           }
           if (isFileTransferSessionUnavailableError(error)) {
-            wasCancelled = true;
             markSessionDisconnected(message, sessionId);
             break;
           }
-          setConnectionError(message);
+          if (transferBatchGateRef.current.canContinue(batchToken)) setConnectionError(message);
+        } finally {
+          if (activeTransferRef.current?.id === transferId) {
+            activeTransferRef.current = null;
+          }
+          setActiveTransfer((current) => current?.id === transferId ? null : current);
+          setCancelingTransferId(null);
+          let directoryLoaded = false;
+          if (transferBatchGateRef.current.canContinue(batchToken)) {
+            directoryLoaded = await loadLocalDir(localDir, { keepSearch: true });
+          }
+          if (!directoryLoaded) {
+            setLocalSnapshot((snapshot) =>
+              rollbackInsertedTransferEntry(snapshot, localDir, placeholder)
+            );
+          }
+          await settleTransferHistory(connectionId, () =>
+            pageDisposedRef.current ? null : currentConnectionIdRef.current,
+          loadHistory, (historyLoaded) => {
+            if (completionMessage) setConnectionError(completionMessage);
+            setFallbackTransfer(historyLoaded ? null : nextTransfer);
+            setProgressMap((current) => finalizeTransferProgress(current, {
+              transferId, direction: "download", totalBytes: nextTransfer.totalBytes,
+              status: completionStatus, message: completionMessage,
+            }, historyLoaded));
+          });
         }
       }
-
-      if (!wasCancelled) {
-        await loadLocalDir(localDir);
-      }
-      await loadHistory();
     } finally {
-      setTransferBusy(false);
-      setCancelingTransferId(null);
-      activeTransferRef.current = null;
-      setActiveTransfer(null);
+      if (transferBatchGateRef.current.finish(batchToken)) {
+        setTransferBusy(false);
+        setCancelingTransferId(null);
+        activeTransferRef.current = null;
+        setActiveTransfer(null);
+      }
     }
   };
 
@@ -968,19 +1027,26 @@ export function FileTransferPage({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      {connectionError && (
-        <FileTransferConnectionAlert
-          message={connectionError}
-          phase={connectionPhase}
-          onReconnect={reconnectFileTransfer}
-        />
-      )}
+      <TransferPageErrorAlerts
+        connectionError={connectionError}
+        historyError={historyError}
+        phase={connectionPhase}
+        onReconnect={reconnectFileTransfer}
+      />
 
       <div className={layoutClasses.grid}>
         <FilePanel
           title="本地文件"
           icon={HardDrive}
           snapshot={localSnapshot}
+          sizeOverlay={activeTransfer?.direction === "download" && activeProgress
+            ? {
+                targetDir: activeTransfer.localDir,
+                fileName: activeTransfer.fileName,
+                bytesTransferred: activeProgress.status === "success"
+                  ? activeProgress.totalBytes : activeProgress.bytesTransferred,
+              }
+            : null}
           loading={localLoading}
           selectedPaths={selectedLocalPaths}
           pathValue={localPathInput}
@@ -1029,6 +1095,14 @@ export function FileTransferPage({
           title="远程文件"
           icon={Server}
           snapshot={remoteSnapshot}
+          sizeOverlay={activeTransfer?.direction === "upload" && activeProgress
+            ? {
+                targetDir: activeTransfer.remoteDir,
+                fileName: activeTransfer.fileName,
+                bytesTransferred: activeProgress.status === "success"
+                  ? activeProgress.totalBytes : activeProgress.bytesTransferred,
+              }
+            : null}
           showPermissions
           loading={
             (remoteLoading && connectionPhase !== "reconnecting") ||
@@ -1122,7 +1196,16 @@ export function FileTransferPage({
                   cancelDisabled={cancelingTransferId === activeTransfer.id}
                 />
               )}
-              {history.length === 0 && !activeTransfer && (
+              {fallbackTransfer && (
+                <TransferHistoryFallbackRow
+                  transfer={fallbackTransfer}
+                  progress={progressMap[fallbackTransfer.id] ?? null}
+                  onLocalDir={() => void loadLocalDir(fallbackTransfer.localDir)}
+                  onRemoteDir={() => void loadRemoteDir(fallbackTransfer.remoteDir)}
+                  remoteDirDisabled={!remoteSessionReady}
+                />
+              )}
+              {history.length === 0 && !activeTransfer && !fallbackTransfer && (
                 <div className="flex h-[160px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
                   暂无传输历史
                 </div>
@@ -1281,6 +1364,7 @@ export function FilePanel({
   title,
   icon: Icon,
   snapshot,
+  sizeOverlay = null,
   showPermissions = false,
   loading,
   interactionDisabled = false,
@@ -1301,6 +1385,7 @@ export function FilePanel({
   title: string;
   icon: typeof HardDrive;
   snapshot: LocalDirSnapshot | RemoteDirSnapshot | null;
+  sizeOverlay?: { targetDir: string; fileName: string; bytesTransferred: number } | null;
   showPermissions?: boolean;
   loading: boolean;
   interactionDisabled?: boolean;
@@ -1455,7 +1540,11 @@ export function FilePanel({
                   )}
                   {!entry.isDirectory && (
                     <span className="shrink-0 text-xs text-muted-foreground">
-                      {formatTransferBytes(entry.size ?? 0)}
+                      {formatTransferBytes(
+                        sizeOverlay && snapshot.cwd === sizeOverlay.targetDir &&
+                        entry.name === sizeOverlay.fileName
+                          ? sizeOverlay.bytesTransferred : entry.size ?? 0
+                      )}
                     </span>
                   )}
                 </button>
@@ -1466,6 +1555,74 @@ export function FilePanel({
         <div className={layoutClasses.footer}>{footer}</div>
       </CardContent>
     </Card>
+  );
+}
+
+export function TransferPageErrorAlerts({
+  connectionError,
+  historyError,
+  phase,
+  onReconnect,
+}: {
+  connectionError: string | null;
+  historyError: string | null;
+  phase: FileTransferConnectionPhase;
+  onReconnect: () => void;
+}) {
+  return (
+    <>
+      {connectionError && (
+        <FileTransferConnectionAlert
+          message={connectionError}
+          phase={phase}
+          onReconnect={onReconnect}
+        />
+      )}
+      {historyError && (
+        <FileTransferConnectionAlert
+          message={historyError}
+          phase="connected"
+          onReconnect={onReconnect}
+        />
+      )}
+    </>
+  );
+}
+
+export function TransferHistoryFallbackRow({
+  transfer,
+  progress,
+  onLocalDir,
+  onRemoteDir,
+  remoteDirDisabled = false,
+}: {
+  transfer: ActiveTransfer;
+  progress: TransferProgressPayload | null;
+  onLocalDir: () => void;
+  onRemoteDir: () => void;
+  remoteDirDisabled?: boolean;
+}) {
+  if (!progress || progress.status === "running") return null;
+  return (
+    <HistoryRow
+      name={transfer.fileName}
+      direction={transfer.direction}
+      status={progress.status}
+      localDir={transfer.localDir}
+      remoteDir={transfer.remoteDir}
+      totalBytes={resolveTransferDisplayBytes({
+        status: progress.status,
+        totalBytes: progress.totalBytes,
+        progress,
+      })}
+      progress={progress.progress}
+      speedBps={progress.speedBps}
+      durationMs={null}
+      errorMessage={progress.message}
+      onLocalDir={onLocalDir}
+      onRemoteDir={onRemoteDir}
+      remoteDirDisabled={remoteDirDisabled}
+    />
   );
 }
 

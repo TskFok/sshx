@@ -64,6 +64,7 @@ import {
   terminalColorSchemeLabel,
 } from "@/lib/symphonyTerminalThemes";
 import { SSHX_SETTINGS_UPDATED_EVENT } from "@/lib/settingsEvents";
+import { disconnectTerminalSession } from "@/lib/terminalSessionCleanup";
 import { shouldCloseTerminalTabOnBarClick } from "@/lib/terminalTabBarClick";
 import {
   getTerminalConnectionPickerCardState,
@@ -497,7 +498,7 @@ export function TerminalPage() {
       inst.terminal,
       sessionId,
       (payload) => {
-        if (inst.disposed) return;
+        if (inst.disposed || inst.sessionId !== sessionId) return;
         inst.disconnected = true;
         inst.reconnecting = false;
         writeRemoteClosedNotice(inst.terminal, payload);
@@ -505,8 +506,8 @@ export function TerminalPage() {
         triggerUpdate();
       },
       (error) => {
-        void invoke("ssh_disconnect", { sessionId }).catch(() => {});
-        if (inst.disposed) return;
+        void disconnectTerminalSession(sessionId).catch(() => {});
+        if (inst.disposed || inst.sessionId !== sessionId) return;
         inst.disconnected = true;
         inst.reconnecting = false;
         inst.terminal.write(`\r\n\x1b[31m--- 终端输出失败: ${error} ---\x1b[0m\r\n`);
@@ -521,6 +522,7 @@ export function TerminalPage() {
     async (inst: TerminalInstance) => {
       if (inst.reconnecting || inst.disposed) return;
       inst.reconnecting = true;
+      const oldSessionId = inst.sessionId;
       triggerUpdate();
 
       inst.unlistenOutput?.();
@@ -533,6 +535,8 @@ export function TerminalPage() {
       let unlistenPrompt: UnlistenFn | null = null;
 
       try {
+        await disconnectTerminalSession(oldSessionId);
+        if (inst.disposed) return;
         unlistenPrompt = await setupAuthPromptListener(newSessionId);
 
         if (terminalMountRef.current) {
@@ -812,11 +816,7 @@ export function TerminalPage() {
       inst.unlistenOutput?.();
       inst.terminal.dispose();
       inst.containerEl.remove();
-      if (!inst.disconnected) {
-        invoke("ssh_disconnect", { sessionId: inst.sessionId }).catch(
-          () => {}
-        );
-      }
+      void disconnectTerminalSession(inst.sessionId).catch(() => {});
 
       setTerminals((prev) => prev.filter((t) => t.id !== tabId));
       if (activeTab === tabId) {

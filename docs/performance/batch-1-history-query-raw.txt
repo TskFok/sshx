@@ -1,0 +1,36 @@
+历史查询原始测量输出
+开始时间：2026-09-24 03:42:35 UTC（北京时间 2026-09-24 11:42:35）
+机器：macOS 26.5.2，arm64，Apple M1（8核），16 GB；CPU/内存由 system_profiler 核对（sysctl 读取被沙盒拒绝）
+测试模式：Cargo release profile；rusqlite 0.32.1 bundled SQLite；内存数据库；每组预热 10 次、采样 120 次；每次按 connection_id 查询最新 100 条并反序列化；无索引/有索引在同一数据集依次执行
+命令：cargo test --release --manifest-path src-tauri/Cargo.toml benchmark_history_query_index_before_after -- --ignored --nocapture
+下面 samples_us 是排序前、按采样顺序的全部 120 个微秒值；p50/p95 是排序后的索引 60/114。终端输出按原样追加。
+
+   Compiling sshx v0.5.0 (/Users/ushopal/workspace/myself/sshx/src-tauri)
+    Finished `release` profile [optimized] target(s) in 40.11s
+     Running unittests src/lib.rs (src-tauri/target/release/deps/sshx_lib-782bbc3c484c82dd)
+
+running 1 test
+history_query rows=1000 indexed=false samples_us=[801, 851, 849, 817, 812, 894, 1346, 833, 802, 795, 811, 796, 793, 802, 814, 797, 824, 821, 827, 823, 813, 792, 793, 856, 816, 746, 1178, 889, 723, 702, 695, 725, 701, 691, 691, 701, 645, 610, 613, 608, 607, 609, 607, 608, 625, 689, 624, 644, 625, 638, 960, 606, 558, 552, 547, 545, 545, 543, 544, 544, 570, 579, 582, 570, 552, 529, 498, 498, 499, 499, 498, 500, 524, 510, 500, 498, 497, 499, 498, 502, 501, 692, 475, 462, 464, 459, 458, 458, 462, 463, 459, 460, 459, 458, 458, 461, 459, 459, 433, 430, 429, 431, 434, 434, 429, 430, 456, 468, 442, 437, 434, 432, 431, 431, 429, 429, 432, 444, 781, 472]
+history_query rows=1000 indexed=false runs=120 p50_us=552 p95_us=856 plan=["SCAN file_transfer_history", "USE TEMP B-TREE FOR ORDER BY"]
+history_query rows=1000 indexed=true samples_us=[73, 77, 74, 73, 74, 73, 73, 73, 73, 73, 73, 74, 84, 78, 74, 75, 74, 74, 73, 74, 73, 73, 73, 74, 73, 73, 75, 73, 73, 73, 75, 75, 74, 74, 73, 74, 75, 75, 76, 74, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 74, 73, 73, 73, 73, 73, 72, 73, 73, 73, 73, 73, 73, 73, 73, 74, 73, 73, 73, 73, 73, 73, 74, 73, 73, 73, 73, 73, 73, 74, 73, 73, 73, 74, 74, 99, 113, 75, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 74]
+history_query rows=1000 indexed=true runs=120 p50_us=73 p95_us=76 plan=["SEARCH file_transfer_history USING INDEX idx_transfer_history_connection_started (connection_id=?)"]
+history_query rows=100000 indexed=false samples_us=[34515, 35393, 36506, 36873, 35641, 36274, 38459, 36665, 40254, 36137, 36380, 35007, 36065, 35982, 36488, 34742, 35606, 35863, 36162, 34573, 35107, 34661, 34652, 34733, 34679, 34607, 35016, 35379, 34909, 34668, 35057, 35134, 34543, 34738, 34606, 34949, 34931, 34525, 34765, 34824, 34726, 34713, 35078, 34543, 34608, 34662, 34759, 36364, 37273, 36571, 36375, 35813, 36114, 35364, 35036, 35774, 35279, 38678, 36838, 36687, 37295, 37726, 43753, 37268, 35404, 36188, 35593, 35927, 35683, 35322, 35971, 35694, 35617, 35396, 35877, 35572, 35841, 35941, 35778, 36175, 35427, 35682, 35892, 39607, 40277, 45883, 40073, 44127, 39613, 41132, 43540, 55163, 64203, 51183, 69800, 40650, 71892, 64267, 48779, 53374, 47418, 64889, 68087, 69712, 67923, 121340, 67924, 53188, 69307, 61455, 53704, 49679, 47171, 47499, 52858, 45115, 40745, 39776, 52207, 41432]
+history_query rows=100000 indexed=false runs=120 p50_us=36137 p95_us=68087 plan=["SCAN file_transfer_history", "USE TEMP B-TREE FOR ORDER BY"]
+history_query rows=100000 indexed=true samples_us=[78, 76, 76, 122, 91, 81, 78, 96, 105, 77, 76, 76, 76, 76, 76, 76, 76, 76, 76, 77, 229, 241, 257, 101, 78, 77, 200, 80, 76, 76, 76, 76, 191, 167, 293, 113, 83, 78, 77, 77, 76, 76, 76, 76, 75, 75, 75, 76, 75, 75, 75, 75, 75, 75, 76, 76, 75, 76, 76, 75, 75, 76, 75, 76, 76, 76, 76, 76, 75, 76, 76, 76, 250, 140, 81, 77, 76, 76, 76, 76, 75, 76, 76, 75, 75, 76, 75, 76, 76, 76, 75, 76, 75, 76, 75, 76, 75, 76, 112, 85, 76, 76, 76, 76, 906, 272, 216, 212, 210, 209, 210, 209, 208, 126, 87, 79, 77, 142, 77, 76]
+history_query rows=100000 indexed=true runs=120 p50_us=76 p95_us=241 plan=["SEARCH file_transfer_history USING INDEX idx_transfer_history_connection_started (connection_id=?)"]
+test db::file_transfer::tests::benchmark_history_query_index_before_after ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 143 filtered out; finished in 5.63s
+
+     Running unittests src/main.rs (src-tauri/target/release/deps/sshx-cea9fc3c49415832)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/russh_vendor_patch.rs (src-tauri/target/release/deps/russh_vendor_patch-7f074062115be37c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

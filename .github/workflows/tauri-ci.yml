@@ -66,5 +66,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run frontend tests
+        run: pnpm test
+
       - name: Build Tauri app
         run: pnpm tauri build

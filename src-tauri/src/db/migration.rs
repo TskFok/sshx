@@ -181,6 +181,8 @@ fn migrate_v5_file_transfer_history(conn: &Connection) -> Result<(), rusqlite::E
             duration_ms = COALESCE(duration_ms, 0),
             average_speed_bps = COALESCE(average_speed_bps, 0)
         WHERE status = 'running';
+        CREATE INDEX IF NOT EXISTS idx_transfer_history_connection_started
+        ON file_transfer_history(connection_id, started_at DESC);
         ",
     )?;
     Ok(())
@@ -189,6 +191,37 @@ fn migrate_v5_file_transfer_history(conn: &Connection) -> Result<(), rusqlite::E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_index_has_connection_then_descending_start_and_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_index_list('file_transfer_history') WHERE name = ?1",
+                ["idx_transfer_history_connection_started"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let columns: Vec<(String, i64)> = conn
+            .prepare("SELECT name, \"desc\" FROM pragma_index_xinfo('idx_transfer_history_connection_started') WHERE key = 1 ORDER BY seqno")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            vec![
+                ("connection_id".to_string(), 0),
+                ("started_at".to_string(), 1)
+            ]
+        );
+    }
 
     #[test]
     fn test_run_migrations() {

@@ -1,5 +1,7 @@
 use tokio::sync::watch;
 
+pub(super) mod lifecycle;
+
 pub(super) enum SessionCmd {
     Data(Vec<u8>),
     Resize { cols: u32, rows: u32 },

@@ -1,3 +1,4 @@
+use crate::commands::transfer_progress::ProgressGate;
 use crate::db::{file_transfer, Database};
 use crate::models::{
     FileTransferCancelRequest, FileTransferDirection, FileTransferDownloadRequest,
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 const FILE_TRANSFER_PROGRESS_EVENT: &str = "file-transfer-progress";
@@ -178,6 +179,7 @@ pub async fn file_transfer_upload(
     let progress_app = app.clone();
     let progress_id = request.transfer_id.clone();
     let progress_started = started;
+    let mut progress_gate = ProgressGate::new(Duration::from_millis(100));
     let result = manager
         .sftp_upload_with_progress(
             &request.session_id,
@@ -187,14 +189,16 @@ pub async fn file_transfer_upload(
             total_bytes,
             cancel_token.flag(),
             move |bytes| {
-                emit_running_progress(
-                    &progress_app,
-                    &progress_id,
-                    FileTransferDirection::Upload,
-                    bytes,
-                    total_bytes,
-                    progress_started,
-                );
+                if progress_gate.should_emit_running(Instant::now()) {
+                    emit_running_progress(
+                        &progress_app,
+                        &progress_id,
+                        FileTransferDirection::Upload,
+                        bytes,
+                        total_bytes,
+                        progress_started,
+                    );
+                }
             },
         )
         .await;
@@ -283,6 +287,7 @@ pub async fn file_transfer_download(
     let progress_app = app.clone();
     let progress_id = request.transfer_id.clone();
     let progress_started = started;
+    let mut progress_gate = ProgressGate::new(Duration::from_millis(100));
     let result = manager
         .sftp_download_with_progress(
             &request.session_id,
@@ -292,14 +297,16 @@ pub async fn file_transfer_download(
             total_bytes,
             cancel_token.flag(),
             move |bytes| {
-                emit_running_progress(
-                    &progress_app,
-                    &progress_id,
-                    FileTransferDirection::Download,
-                    bytes,
-                    total_bytes,
-                    progress_started,
-                );
+                if progress_gate.should_emit_running(Instant::now()) {
+                    emit_running_progress(
+                        &progress_app,
+                        &progress_id,
+                        FileTransferDirection::Download,
+                        bytes,
+                        total_bytes,
+                        progress_started,
+                    );
+                }
             },
         )
         .await;
@@ -446,6 +453,27 @@ fn emit_progress(
     status: FileTransferStatus,
     message: Option<String>,
 ) {
+    let payload = build_progress_payload(
+        transfer_id,
+        direction,
+        bytes_transferred,
+        total_bytes,
+        speed_bps,
+        status,
+        message,
+    );
+    let _ = app.emit(FILE_TRANSFER_PROGRESS_EVENT, payload);
+}
+
+fn build_progress_payload(
+    transfer_id: &str,
+    direction: FileTransferDirection,
+    bytes_transferred: u64,
+    total_bytes: u64,
+    speed_bps: u64,
+    status: FileTransferStatus,
+    message: Option<String>,
+) -> FileTransferProgressPayload {
     let progress = if total_bytes == 0 {
         if matches!(status, FileTransferStatus::Success) {
             100.0
@@ -455,19 +483,16 @@ fn emit_progress(
     } else {
         ((bytes_transferred.min(total_bytes) as f64 / total_bytes as f64) * 100.0).clamp(0.0, 100.0)
     };
-    let _ = app.emit(
-        FILE_TRANSFER_PROGRESS_EVENT,
-        FileTransferProgressPayload {
-            transfer_id: transfer_id.to_string(),
-            direction,
-            bytes_transferred: bytes_transferred.min(total_bytes),
-            total_bytes,
-            speed_bps,
-            progress,
-            status,
-            message,
-        },
-    );
+    FileTransferProgressPayload {
+        transfer_id: transfer_id.to_string(),
+        direction,
+        bytes_transferred: bytes_transferred.min(total_bytes),
+        total_bytes,
+        speed_bps,
+        progress,
+        status,
+        message,
+    }
 }
 
 fn list_local_dir(dir: PathBuf) -> Result<LocalDirSnapshot, String> {
@@ -550,6 +575,59 @@ fn split_remote_file_path(remote_path: &str) -> Result<(String, String), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_transfer_can_report_success_after_running_is_throttled() {
+        let start = Instant::now();
+        let mut gate = ProgressGate::new(Duration::from_millis(100));
+        assert!(gate.should_emit_running(start));
+        assert!(!gate.should_emit_running(start + Duration::from_millis(50)));
+
+        let terminal = build_progress_payload(
+            "short",
+            FileTransferDirection::Upload,
+            5,
+            5,
+            100,
+            FileTransferStatus::Success,
+            None,
+        );
+        assert!(matches!(terminal.status, FileTransferStatus::Success));
+        assert_eq!(terminal.progress, 100.0);
+        assert_eq!(terminal.bytes_transferred, 5);
+    }
+
+    #[test]
+    fn zero_byte_success_reports_complete() {
+        let terminal = build_progress_payload(
+            "empty",
+            FileTransferDirection::Download,
+            0,
+            0,
+            0,
+            FileTransferStatus::Success,
+            None,
+        );
+        assert!(matches!(terminal.status, FileTransferStatus::Success));
+        assert_eq!(terminal.progress, 100.0);
+        assert_eq!(terminal.bytes_transferred, 0);
+    }
+
+    #[test]
+    fn cancelled_transfer_failure_preserves_error_message() {
+        let terminal = build_progress_payload(
+            "cancelled",
+            FileTransferDirection::Download,
+            0,
+            100,
+            0,
+            FileTransferStatus::Failed,
+            Some("用户取消传输".to_string()),
+        );
+        assert!(matches!(terminal.status, FileTransferStatus::Failed));
+        assert_eq!(terminal.progress, 0.0);
+        assert_eq!(terminal.message.as_deref(), Some("用户取消传输"));
+    }
 
     #[test]
     fn split_remote_file_path_rejects_relative_and_root() {

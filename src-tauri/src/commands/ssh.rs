@@ -643,10 +643,7 @@ pub async fn ssh_disconnect(
     manager: State<'_, SessionManager>,
     session_id: String,
 ) -> Result<(), String> {
-    if let Some(session) = manager.remove_session(&session_id).await {
-        session.close().await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    manager.disconnect(&session_id).await
 }
 
 #[tauri::command]
