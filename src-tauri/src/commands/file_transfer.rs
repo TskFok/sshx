@@ -620,7 +620,21 @@ fn split_remote_file_path(remote_path: &str) -> Result<(String, String), String>
 fn validate_local_download_target(path: &Path, overwrite: bool) -> Result<(), String> {
     let link_metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Windows 也可能把普通文件下的子路径报告为 NotFound，需确认父目录有效。
+            let parent = path
+                .parent()
+                .ok_or_else(|| "无效的本地目标路径".to_string())?;
+            let parent = if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            };
+            if !parent.is_dir() {
+                return Err("本地保存路径不是可访问的目录".to_string());
+            }
+            return Ok(());
+        }
         Err(_) => return Err("无法读取本地目标信息".to_string()),
     };
     let metadata = if link_metadata.file_type().is_symlink() {
@@ -786,9 +800,36 @@ mod tests {
         let directory = root.join("directory");
         std::fs::create_dir(&directory).unwrap();
         assert!(validate_local_download_target(&directory, true).is_err());
-        // NotADirectory 等读取错误不能被当作目标不存在。
+        // 普通文件下的子路径不可作为下载目标，无论平台返回哪种错误。
         assert!(validate_local_download_target(&regular.join("child"), true).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_target_requires_existing_parent_directory() {
+        let root =
+            std::env::temp_dir().join(format!("sshx-download-parent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let regular = root.join("regular");
+        std::fs::write(&regular, b"old").unwrap();
+        for overwrite in [false, true] {
+            assert!(validate_local_download_target(&root.join("new"), overwrite).is_ok());
+            assert!(
+                validate_local_download_target(&root.join("missing/child"), overwrite).is_err()
+            );
+            assert!(validate_local_download_target(&regular.join("child"), overwrite).is_err());
+            assert!(
+                validate_local_download_target(&regular.join("missing/child"), overwrite).is_err()
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_target_accepts_missing_file_in_current_directory() {
+        let relative = PathBuf::from(format!("sshx-download-relative-{}", uuid::Uuid::new_v4()));
+        assert!(validate_local_download_target(&relative, false).is_ok());
+        assert!(validate_local_download_target(&relative, true).is_ok());
     }
 
     #[cfg(unix)]
@@ -808,6 +849,12 @@ mod tests {
         symlink(root.join("missing-outside"), &broken).unwrap();
         assert!(validate_local_download_target(&broken, false).is_err());
         assert!(validate_local_download_target(&broken, true).is_err());
+        let directory_link = root.join("directory-link");
+        symlink(&root, &directory_link).unwrap();
+        assert!(validate_local_download_target(&directory_link.join("new"), false).is_ok());
+        assert!(validate_local_download_target(&directory_link.join("new"), true).is_ok());
+        assert!(validate_local_download_target(&broken.join("child"), false).is_err());
+        assert!(validate_local_download_target(&broken.join("child"), true).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
