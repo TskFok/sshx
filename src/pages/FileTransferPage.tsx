@@ -27,13 +27,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   useAppStore,
   type ConnectionGroup,
-  type ConnectionInfo,
+  type ConnectionSummary,
   type SshClosePayload,
 } from "@/store";
 import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
 import { getConnectionFileTransferPath } from "@/lib/connectionNavigation";
 import {
   filterFileEntriesBySearch,
+  indexFileEntries,
+  selectedFilesFromIndex,
   formatTransferBytes,
   formatTransferSpeed,
   resolveFileOverwriteDecision,
@@ -69,6 +71,8 @@ import {
   getFileTransferHistoryLayoutClasses,
 } from "@/lib/fileTransferPanelLayout";
 import { cn } from "@/lib/utils";
+import { getFileListWindow } from "@/lib/fileListWindow";
+import { loadConnectionCatalog } from "@/lib/connectionCatalog";
 
 interface FileEntry {
   name: string;
@@ -173,9 +177,7 @@ export function FileTransferPage({
   const layoutClasses = getFilePanelLayoutClasses();
   const historyLayoutClasses = getFileTransferHistoryLayoutClasses();
   const connections = useAppStore((s) => s.connections);
-  const setConnections = useAppStore((s) => s.setConnections);
   const groups = useAppStore((s) => s.groups);
-  const setGroups = useAppStore((s) => s.setGroups);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -224,19 +226,19 @@ export function FileTransferPage({
     () => connections.find((item) => item.id === connectionId),
     [connections, connectionId]
   );
+  const localEntryIndex = useMemo(
+    () => indexFileEntries(localSnapshot?.entries ?? []), [localSnapshot?.entries]
+  );
+  const remoteEntryIndex = useMemo(
+    () => indexFileEntries(remoteSnapshot?.entries ?? []), [remoteSnapshot?.entries]
+  );
   const selectedLocalFiles = useMemo(
-    () =>
-      selectedLocalPaths
-        .map((path) => localSnapshot?.entries.find((entry) => entry.path === path))
-        .filter((entry): entry is FileEntry => Boolean(entry && !entry.isDirectory)),
-    [localSnapshot?.entries, selectedLocalPaths]
+    () => selectedFilesFromIndex(localEntryIndex, selectedLocalPaths),
+    [localEntryIndex, selectedLocalPaths]
   );
   const selectedRemoteFiles = useMemo(
-    () =>
-      selectedRemotePaths
-        .map((path) => remoteSnapshot?.entries.find((entry) => entry.path === path))
-        .filter((entry): entry is FileEntry => Boolean(entry && !entry.isDirectory)),
-    [remoteSnapshot?.entries, selectedRemotePaths]
+    () => selectedFilesFromIndex(remoteEntryIndex, selectedRemotePaths),
+    [remoteEntryIndex, selectedRemotePaths]
   );
   const activeProgress = activeTransfer ? progressMap[activeTransfer.id] : null;
   const remoteSessionReady = canUseFileTransferSession(
@@ -271,18 +273,13 @@ export function FileTransferPage({
   const loadConnections = useCallback(async () => {
     setConnectionsLoading(true);
     try {
-      const [conns, groups] = await Promise.all([
-        invoke<ConnectionInfo[]>("list_connections"),
-        invoke<ConnectionGroup[]>("list_groups"),
-      ]);
-      setConnections(conns);
-      setGroups(groups);
+      await loadConnectionCatalog();
     } catch {
       // Tauri 外运行时保持当前状态。
     } finally {
       setConnectionsLoading(false);
     }
-  }, [setConnections, setGroups]);
+  }, []);
 
   const loadLocalDir = useCallback(
     async (path?: string | null, options?: { keepSearch?: boolean }): Promise<boolean> => {
@@ -1253,7 +1250,7 @@ export function FileTransferConnectionPicker({
   groups,
   loading,
 }: {
-  connections: ConnectionInfo[];
+  connections: ConnectionSummary[];
   groups: ConnectionGroup[];
   loading: boolean;
 }) {
@@ -1408,6 +1405,72 @@ export function FilePanel({
     () => (snapshot ? filterFileEntriesBySearch(snapshot.entries, searchValue) : []),
     [snapshot, searchValue]
   );
+  const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 440 });
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
+  const rowHeight = 44;
+  const window = getFileListWindow(
+    filteredEntries.length, viewport.top, viewport.height, rowHeight, 6
+  );
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const measure = () => {
+      // 隐藏的保活工作区高度为零，保留上次尺寸，恢复时由 observer 更新。
+      if (!element.clientHeight) return;
+      setViewport({ top: element.scrollTop, height: element.clientHeight });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    element.scrollTop = 0;
+    setViewport((current) => ({ ...current, top: 0 }));
+    setFocusIndex(null);
+  }, [snapshot?.cwd, searchValue]);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const top = Math.min(element.scrollTop, Math.max(0, filteredEntries.length * rowHeight - viewport.height));
+    element.scrollTop = top;
+    setViewport((current) => current.top === top ? current : { ...current, top });
+  }, [filteredEntries.length, viewport.height]);
+
+  useEffect(() => {
+    if (focusIndex === null) return;
+    viewportRef.current?.querySelector<HTMLButtonElement>(`[data-file-index="${focusIndex}"]`)?.focus({ preventScroll: true });
+    // 键盘导航的焦点请求只消费一次；窗口范围随搜索或手动滚动变化时不再抢焦点。
+    setFocusIndex(null);
+  }, [focusIndex]);
+
+  const navigateRows = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const page = Math.max(1, Math.floor(viewport.height / rowHeight));
+    const targets: Record<string, number> = {
+      ArrowDown: index + 1, ArrowUp: index - 1,
+      PageDown: index + page, PageUp: index - page,
+      Home: 0, End: filteredEntries.length - 1,
+    };
+    if (!(event.key in targets)) return;
+    event.preventDefault();
+    const target = Math.max(0, Math.min(filteredEntries.length - 1, targets[event.key]));
+    const element = viewportRef.current;
+    if (!element) return;
+    const top = target * rowHeight;
+    if (top < element.scrollTop) element.scrollTop = top;
+    else if (top + rowHeight > element.scrollTop + viewport.height) {
+      element.scrollTop = top + rowHeight - viewport.height;
+    }
+    setViewport((current) => ({ ...current, top: element.scrollTop }));
+    setFocusIndex(target);
+  };
 
   return (
     <Card className={layoutClasses.card}>
@@ -1486,7 +1549,16 @@ export function FilePanel({
         </div>
       </CardHeader>
       <CardContent className={layoutClasses.content}>
-        <ScrollArea className={layoutClasses.list}>
+        <ScrollArea
+          className={layoutClasses.list}
+          viewportRef={viewportRef}
+          viewportProps={{
+            onScroll: (event) => {
+              const top = event.currentTarget.scrollTop;
+              setViewport((current) => ({ ...current, top }));
+            },
+          }}
+        >
           {loading && (
             <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1507,20 +1579,24 @@ export function FilePanel({
               </div>
             )}
           {!loading && snapshot && filteredEntries.length > 0 && (
-            <div className="space-y-1">
-              {filteredEntries.map((entry) => (
+            <div>
+              <div aria-hidden="true" style={{ height: window.topPad }} />
+              {filteredEntries.slice(window.start, window.end).map((entry, offset) => (
                 <button
                   key={entry.path}
                   type="button"
+                  data-file-index={window.start + offset}
+                  aria-pressed={entry.isDirectory ? undefined : selectedPathSet.has(entry.path)}
                   className={cn(
-                    "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
-                    selectedPaths.includes(entry.path) && "bg-primary/10 text-primary"
+                    "flex h-11 w-full min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
+                    selectedPathSet.has(entry.path) && "bg-primary/10 text-primary"
                   )}
                   aria-label={`${
                     entry.isDirectory ? "打开目录" : "选择文件"
                   } ${entry.name}`}
                   disabled={interactionDisabled}
                   onClick={() => onSelect(entry)}
+                  onKeyDown={(event) => navigateRows(event, window.start + offset)}
                 >
                   {entry.isDirectory ? (
                     <Folder className="h-4 w-4 shrink-0 text-blue-600" />
@@ -1549,6 +1625,7 @@ export function FilePanel({
                   )}
                 </button>
               ))}
+              <div aria-hidden="true" style={{ height: window.bottomPad }} />
             </div>
           )}
         </ScrollArea>

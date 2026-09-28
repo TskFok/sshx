@@ -1,12 +1,14 @@
 import { Routes, Route } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
-import { Dashboard } from "@/pages/Dashboard";
-import { Connections } from "@/pages/Connections";
-import { Settings } from "@/pages/Settings";
-import { Diagnostics } from "@/pages/Diagnostics";
+import { createLazyPage } from "@/components/layout/LazyPage";
 import { useAppStore } from "@/store";
 import { useEffect } from "react";
 import { HostKeyTrustDialog } from "@/components/ssh/HostKeyTrustDialog";
+
+const Dashboard = createLazyPage(() => import("@/pages/Dashboard").then((m) => ({ default: m.Dashboard })), "仪表盘");
+const Connections = createLazyPage(() => import("@/pages/Connections").then((m) => ({ default: m.Connections })), "连接管理");
+const Settings = createLazyPage(() => import("@/pages/Settings").then((m) => ({ default: m.Settings })), "设置");
+const Diagnostics = createLazyPage(() => import("@/pages/Diagnostics").then((m) => ({ default: m.Diagnostics })), "诊断");
 
 function App() {
   const theme = useAppStore((s) => s.theme);

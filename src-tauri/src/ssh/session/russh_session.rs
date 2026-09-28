@@ -1,5 +1,8 @@
 use super::lifecycle::{SessionEndGuard, SessionLifecycle};
-use super::{OutputFlow, SessionCmd, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
+use super::{
+    next_session_event, InputSender, OutputFlow, SessionEvent, SSH_OUTPUT_CHUNK_BYTES,
+    TRANSFER_CANCELLED_MESSAGE,
+};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::ClientHandler;
@@ -8,7 +11,6 @@ use russh::ChannelId;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
 
 pub struct SshSession {
     pub id: String,
@@ -17,7 +19,7 @@ pub struct SshSession {
     handle: Handle<ClientHandler>,
     #[allow(dead_code)]
     pub channel_id: ChannelId,
-    cmd_tx: mpsc::UnboundedSender<SessionCmd>,
+    input: InputSender,
     output_flow: Arc<OutputFlow>,
     lifecycle: SessionLifecycle,
 }
@@ -40,7 +42,7 @@ impl SshSession {
         channel.request_shell(true).await?;
 
         let channel_id = channel.id();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
+        let (input, mut input_rx, mut resize_rx) = InputSender::new(cols, rows);
         let sid = id.clone();
         let output_flow = Arc::new(OutputFlow::new(output_flow_control));
         let output_flow_loop = output_flow.clone();
@@ -54,98 +56,101 @@ impl SshSession {
                 Close,
             }
 
-            let mut ch = channel;
+            let (mut reader, writer) = channel.split();
+            let writer = Arc::new(writer);
             let mut pending_output = None;
+            let mut has_write = false;
+            let mut writing: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> =
+                Box::pin(std::future::pending());
 
-            'session: loop {
-                if let Some(pending) = pending_output.as_ref() {
-                    let reserve_bytes = match pending {
-                        PendingOutput::Data { bytes, offset } => {
-                            (bytes.len() - offset).min(SSH_OUTPUT_CHUNK_BYTES)
-                        }
-                        PendingOutput::Close => 0,
-                    };
-
-                    tokio::select! {
-                        reserved = output_flow_loop.reserve(reserve_bytes) => {
-                            if !reserved {
-                                break 'session;
-                            }
-
-                            match pending_output.take().expect("pending output must exist") {
-                                PendingOutput::Data { bytes, offset } => {
-                                    let end = (offset + SSH_OUTPUT_CHUNK_BYTES).min(bytes.len());
-                                    let _ = app.emit(
-                                        &format!("ssh-data-{}", sid),
-                                        bytes[offset..end].to_vec(),
-                                    );
-                                    if end < bytes.len() {
-                                        pending_output = Some(PendingOutput::Data {
-                                            bytes,
-                                            offset: end,
-                                        });
-                                    }
-                                }
-                                PendingOutput::Close => {
-                                    record_event(
-                                        Some(&app),
-                                        "ssh_session",
-                                        format!(
-                                            "SSH 通道结束 session_id={sid}（EOF 或对端关闭连接）"
-                                        ),
-                                    );
-                                    let _ = app.emit(
-                                        &format!("ssh-close-{}", sid),
-                                        SshClosePayload {
-                                            reason: "remote".to_string(),
-                                        },
-                                    );
-                                    break 'session;
-                                }
-                            }
-                        }
-                        command = cmd_rx.recv() => {
-                            match command {
-                                Some(SessionCmd::Data(data)) => {
-                                    let _ = ch.data(std::io::Cursor::new(data)).await;
-                                }
-                                Some(SessionCmd::Resize { cols, rows }) => {
-                                    let _ = ch.window_change(cols, rows, 0, 0).await;
-                                }
-                                None => break 'session,
-                            }
+            loop {
+                let reserve_bytes = match pending_output.as_ref() {
+                    Some(PendingOutput::Data { bytes, offset }) => {
+                        (bytes.len() - offset).min(SSH_OUTPUT_CHUNK_BYTES)
+                    }
+                    _ => 0,
+                };
+                match next_session_event(
+                    &mut input_rx,
+                    &mut resize_rx,
+                    reader.wait(),
+                    output_flow_loop.reserve(reserve_bytes),
+                    writing.as_mut(),
+                    pending_output.is_some(),
+                    has_write,
+                )
+                .await
+                {
+                    SessionEvent::Input(chunk) => {
+                        let writer = writer.clone();
+                        has_write = true;
+                        writing = Box::pin(async move {
+                            let result = writer
+                                .data(std::io::Cursor::new(&chunk.bytes))
+                                .await
+                                .map_err(|e| e.to_string());
+                            let success = result.is_ok();
+                            chunk.finish(result);
+                            success
+                        });
+                    }
+                    SessionEvent::WriteComplete(success) => {
+                        has_write = false;
+                        writing = Box::pin(std::future::pending());
+                        if !success {
+                            break;
                         }
                     }
-                    continue;
-                }
-
-                loop {
-                    match cmd_rx.try_recv() {
-                        Ok(SessionCmd::Data(data)) => {
-                            let _ = ch.data(std::io::Cursor::new(data)).await;
+                    SessionEvent::Resize(cols, rows) => {
+                        if writer.window_change(cols, rows, 0, 0).await.is_err() {
+                            break;
                         }
-                        Ok(SessionCmd::Resize { cols, rows }) => {
-                            let _ = ch.window_change(cols, rows, 0, 0).await;
-                        }
-                        Err(mpsc::error::TryRecvError::Empty) => break,
-                        Err(mpsc::error::TryRecvError::Disconnected) => break 'session,
                     }
-                }
-
-                match tokio::time::timeout(std::time::Duration::from_millis(5), ch.wait()).await {
-                    Ok(Some(russh::ChannelMsg::Data { ref data })) => {
+                    SessionEvent::Remote(Some(russh::ChannelMsg::Data { data })) => {
                         pending_output = Some(PendingOutput::Data {
                             bytes: data.to_vec(),
                             offset: 0,
                         });
                     }
-                    Ok(Some(russh::ChannelMsg::Eof)) | Ok(None) => {
+                    SessionEvent::Remote(Some(
+                        russh::ChannelMsg::Eof | russh::ChannelMsg::Close,
+                    ))
+                    | SessionEvent::Remote(None) => {
                         pending_output = Some(PendingOutput::Close);
                     }
-                    Ok(Some(russh::ChannelMsg::ExitStatus { exit_status })) => {
+                    SessionEvent::Remote(Some(russh::ChannelMsg::ExitStatus { exit_status })) => {
                         let _ = app.emit(&format!("ssh-exit-{}", sid), exit_status);
                     }
-                    Err(_) => {}
+                    SessionEvent::OutputReady(true) => {
+                        match pending_output.take().expect("pending output must exist") {
+                            PendingOutput::Data { bytes, offset } => {
+                                let end = (offset + SSH_OUTPUT_CHUNK_BYTES).min(bytes.len());
+                                let _ = app.emit(
+                                    &format!("ssh-data-{}", sid),
+                                    bytes[offset..end].to_vec(),
+                                );
+                                if end < bytes.len() {
+                                    pending_output =
+                                        Some(PendingOutput::Data { bytes, offset: end });
+                                }
+                            }
+                            PendingOutput::Close => {
+                                record_event(
+                                    Some(&app),
+                                    "ssh_session",
+                                    format!("SSH 通道结束 session_id={sid}（EOF 或对端关闭连接）"),
+                                );
+                                let _ = app.emit(
+                                    &format!("ssh-close-{}", sid),
+                                    SshClosePayload {
+                                        reason: "remote".to_string(),
+                                    },
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    SessionEvent::Closed | SessionEvent::OutputReady(false) => break,
                     _ => {}
                 }
             }
@@ -158,22 +163,18 @@ impl SshSession {
             connection_id,
             handle,
             channel_id,
-            cmd_tx,
+            input,
             output_flow,
             lifecycle,
         })
     }
 
-    pub fn write(&self, data: Vec<u8>) -> Result<(), String> {
-        self.cmd_tx
-            .send(SessionCmd::Data(data))
-            .map_err(|_| "session closed".to_string())
+    pub async fn write(&self, data: Vec<u8>) -> Result<(), String> {
+        self.input.write(data).await
     }
 
     pub fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
-        self.cmd_tx
-            .send(SessionCmd::Resize { cols, rows })
-            .map_err(|_| "session closed".to_string())
+        self.input.resize(cols, rows)
     }
 
     pub fn ready_output(&self) {
@@ -189,6 +190,7 @@ impl SshSession {
     }
 
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.input.close();
         self.output_flow.close();
         self.lifecycle.finish();
         self.handle

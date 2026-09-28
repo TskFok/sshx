@@ -1,10 +1,18 @@
 import { Outlet, useLocation } from "react-router-dom";
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { TerminalPage } from "@/pages/TerminalPage";
-import { FileTransferWorkspace } from "@/pages/FileTransferWorkspace";
+import { createLazyPage } from "./LazyPage";
+import { getVisitedWorkspaces } from "./workspaceMount";
+import { loadConnectionCatalog } from "@/lib/connectionCatalog";
+
+const TerminalPage = createLazyPage(
+  () => import("@/pages/TerminalPage").then((m) => ({ default: m.TerminalPage })), "终端"
+);
+const FileTransferWorkspace = createLazyPage(
+  () => import("@/pages/FileTransferWorkspace").then((m) => ({ default: m.FileTransferWorkspace })), "文件传输"
+);
 
 export function resetMainScrollContainer(
   container: { scrollTop: number } | null
@@ -26,6 +34,17 @@ export function MainLayout() {
   const isPersistentWorkspace = isTerminal || isFileTransfer;
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const fileTransferScrollRef = useRef<HTMLElement | null>(null);
+  const [visited, setVisited] = useState(() => getVisitedWorkspaces(
+    { terminal: false, fileTransfer: false }, location.pathname
+  ));
+  const nextVisited = getVisitedWorkspaces(visited, location.pathname);
+  if (nextVisited !== visited) setVisited(nextVisited);
+
+  useEffect(() => {
+    void loadConnectionCatalog().catch(() => {
+      // 页面仍可重试加载；保留已成功加载的目录数据。
+    });
+  }, []);
 
   useLayoutEffect(() => {
     if (!isPersistentWorkspace) {
@@ -56,7 +75,7 @@ export function MainLayout() {
                 : "hidden"
             }
           >
-            <TerminalPage />
+            {nextVisited.terminal && <TerminalPage />}
           </main>
           <main
             ref={fileTransferScrollRef}
@@ -66,7 +85,7 @@ export function MainLayout() {
                 : "hidden"
             }
           >
-            <FileTransferWorkspace />
+            {nextVisited.fileTransfer && <FileTransferWorkspace />}
           </main>
         </div>
       </div>

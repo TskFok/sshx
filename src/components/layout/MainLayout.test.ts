@@ -18,6 +18,8 @@ async function importMainLayoutForRoute(
     return {
       ...actual,
       useLayoutEffect: (effect: () => void) => effect(),
+      useEffect: () => {},
+      useState: (initial: unknown) => [typeof initial === "function" ? initial() : initial, () => {}],
       useRef: () => {
         const ref = refs.shift();
         if (!ref) throw new Error("Unexpected useRef call");

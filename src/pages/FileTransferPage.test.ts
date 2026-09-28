@@ -178,6 +178,25 @@ describe("FileTransferPage", () => {
     expect(html).toContain("-rw-------");
   });
 
+  it("五万条目录只渲染视口行，选择使用完整路径", () => {
+    const entries = Array.from({ length: 50_000 }, (_, index) => ({
+      name: `file-${index}`, path: `/local/${index}`, isDirectory: false, size: index,
+    }));
+    const html = renderToStaticMarkup(React.createElement(FilePanel, {
+      title: "本地文件", icon: Server, snapshot: { cwd: "/local", entries },
+      loading: false, selectedPaths: ["/local/1", "/remote/2"],
+      pathValue: "/local", onPathChange: () => {}, onPathSubmit: () => {},
+      pathDisabled: false, pathSubmitDisabled: false, searchValue: "",
+      onSearchChange: () => {}, onSelect: () => {}, onRefresh: () => {},
+      onParent: () => {}, parentDisabled: false, footer: null,
+    }));
+    expect((html.match(/data-file-index=/g) ?? []).length).toBeLessThanOrEqual(22);
+    expect(html).toContain('aria-pressed="true"');
+    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBe(1);
+    expect(html).not.toContain("选择文件 file-49999");
+    expect(html).toContain(`height:${(50_000 - 16) * 44}px`);
+  });
+
   it("传输进度只覆盖目标行的显示大小，不修改目录条目", () => {
     const entries = [
       { name: "target.bin", path: "/tmp/target.bin", isDirectory: false, size: 0 },

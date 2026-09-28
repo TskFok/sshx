@@ -94,6 +94,19 @@ export function toggleSelectedFilePath(
   return [...selectedPaths, path];
 }
 
+export function indexFileEntries<T extends { path: string }>(entries: readonly T[]): Map<string, T> {
+  return new Map(entries.map((entry) => [entry.path, entry]));
+}
+
+export function selectedFilesFromIndex<T extends { isDirectory: boolean }>(
+  index: ReadonlyMap<string, T>,
+  paths: readonly string[]
+): T[] {
+  return paths.map((path) => index.get(path)).filter(
+    (entry): entry is T => !!entry && !entry.isDirectory
+  );
+}
+
 export function filterFileEntriesBySearch<TEntry extends Pick<TransferSnapshotEntry, "name">>(
   entries: TEntry[],
   search: string

@@ -36,7 +36,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             diagnostic_commands::diagnostic_logs_get,
             diagnostic_commands::diagnostic_logs_clear,
-            connection::list_connections,
+            connection::list_connection_summaries,
             connection::get_connection,
             connection::create_connection,
             connection::update_connection,

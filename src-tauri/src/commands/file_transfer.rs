@@ -85,11 +85,22 @@ impl Default for TransferCancellationManager {
 pub async fn file_transfer_list_local_dir(
     request: FileTransferListLocalDirRequest,
 ) -> Result<LocalDirSnapshot, String> {
-    let dir = match request.path {
-        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
-        _ => default_local_dir(),
-    };
-    list_local_dir(dir)
+    run_local_directory_task(move || {
+        let dir = match request.path {
+            Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+            _ => default_local_dir(),
+        };
+        list_local_dir(dir)
+    })
+    .await
+}
+
+async fn run_local_directory_task<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|e| format!("本地目录任务异常: {e}"))?
 }
 
 #[tauri::command]
@@ -575,6 +586,59 @@ fn split_remote_file_path(remote_path: &str) -> Result<(String, String), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn file_transfer_list_local_dir_does_not_block_runtime() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = tokio::spawn(run_local_directory_task(move || {
+            let _ = entered_tx.send(());
+            // 超时仅作测试失败时的安全网；正常由异步运行时释放。
+            release_rx
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }));
+        tokio::time::timeout(Duration::from_millis(500), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(release_tx.send(()).is_ok(), "目录扫描阻塞了运行时");
+        assert!(worker.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn file_transfer_list_local_dir_keeps_sorting_and_errors() {
+        let root = std::env::temp_dir().join(format!("sshx-list-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("z-dir")).unwrap();
+        std::fs::write(root.join("b.txt"), b"abc").unwrap();
+        std::fs::write(root.join("A.txt"), b"a").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("missing"), root.join("dangling")).unwrap();
+        let expected = list_local_dir(root.clone()).unwrap();
+        let result = file_transfer_list_local_dir(FileTransferListLocalDirRequest {
+            path: Some(root.to_string_lossy().to_string()),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.entries.iter().map(|e| &e.name).collect::<Vec<_>>(),
+            expected.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+        assert_eq!(result.entries[0].name, "z-dir");
+        assert_eq!(result.entries[1].name, "A.txt");
+        assert_eq!(result.entries[2].size, Some(3));
+        assert!(
+            file_transfer_list_local_dir(FileTransferListLocalDirRequest {
+                path: Some(root.join("missing").to_string_lossy().to_string()),
+            })
+            .await
+            .unwrap_err()
+            .contains("无法打开本地目录")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn short_transfer_can_report_success_after_running_is_throttled() {

@@ -63,7 +63,8 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { useAppStore, type ConnectionInfo, type ConnectionGroup } from "@/store";
+import { useAppStore, type ConnectionInfo, type ConnectionSummary } from "@/store";
+import { loadConnectionCatalog, mutateConnectionCatalog } from "@/lib/connectionCatalog";
 import {
   canDropConnectionDragPayload,
   canDropGroupDragPayload,
@@ -91,6 +92,7 @@ import {
 import {
   authTypeLabel,
   buildConnectionCredentials,
+  buildEditedConnectionCredentials,
   type ConnectionAuthType,
 } from "@/lib/connectionAuth";
 import {
@@ -143,14 +145,13 @@ const emptyForm: ConnectionFormData = {
 export function Connections() {
   const navigate = useNavigate();
   const connections = useAppStore((s) => s.connections);
-  const setConnections = useAppStore((s) => s.setConnections);
   const groups = useAppStore((s) => s.groups);
-  const setGroups = useAppStore((s) => s.setGroups);
 
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const editingDetailRef = useRef<ConnectionInfo | null>(null);
   const [form, setForm] = useState<ConnectionFormData>(emptyForm);
   const [groupForm, setGroupForm] = useState({ name: "", color: "#3b82f6" });
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
@@ -186,16 +187,11 @@ export function Connections() {
 
   const loadData = useCallback(async () => {
     try {
-      const [conns, grps] = await Promise.all([
-        invoke<ConnectionInfo[]>("list_connections"),
-        invoke<ConnectionGroup[]>("list_groups"),
-      ]);
-      setConnections(conns);
-      setGroups(grps);
+      await loadConnectionCatalog();
     } catch {
       // Will fail outside Tauri - use empty data
     }
-  }, [setConnections, setGroups]);
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -213,10 +209,12 @@ export function Connections() {
   }, [groups]);
 
   const handleSave = async () => {
-    const credentials = buildConnectionCredentials(form);
+    const credentials = editingId && editingDetailRef.current
+      ? buildEditedConnectionCredentials(form, editingDetailRef.current)
+      : buildConnectionCredentials(form);
     try {
       if (editingId) {
-        await invoke("update_connection", {
+        await mutateConnectionCatalog("update_connection", {
           request: {
             id: editingId,
             name: form.name,
@@ -232,7 +230,7 @@ export function Connections() {
           },
         });
       } else {
-        await invoke("create_connection", {
+        await mutateConnectionCatalog("create_connection", {
           request: {
             name: form.name,
             host: form.host,
@@ -250,7 +248,7 @@ export function Connections() {
       setDialogOpen(false);
       setForm(emptyForm);
       setEditingId(null);
-      loadData();
+      editingDetailRef.current = null;
     } catch (err) {
       console.error("save connection error:", err);
     }
@@ -265,16 +263,13 @@ export function Connections() {
     setForm((current) => ({ ...current, privateKey: path }));
   };
 
-  const handleEdit = async (conn: ConnectionInfo) => {
-    setEditingId(conn.id);
-    let fullConn = conn;
+  const handleEdit = async (conn: ConnectionSummary) => {
     try {
-      const detail = await invoke<ConnectionInfo>("get_connection", { id: conn.id });
-      if (detail) fullConn = detail;
-    } catch {
-      // fall back to list data
-    }
-    setForm({
+      const fullConn = await invoke<ConnectionInfo | null>("get_connection", { id: conn.id });
+      if (!fullConn) throw new Error("连接详情不存在");
+      editingDetailRef.current = fullConn;
+      setEditingId(conn.id);
+      setForm({
       name: fullConn.name,
       host: fullConn.host,
       port: fullConn.port,
@@ -287,30 +282,32 @@ export function Connections() {
       keepaliveIntervalSecs: fullConn.keepaliveIntervalSecs ?? 30,
       keepaliveMax: fullConn.keepaliveMax ?? 3,
       isImportant: fullConn.isImportant ?? false,
-    });
-    setDialogOpen(true);
+      });
+      setDialogOpen(true);
+    } catch (err) {
+      console.error("load connection detail error:", err);
+    }
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await invoke("delete_connection", { id });
-      loadData();
+      await mutateConnectionCatalog("delete_connection", { id });
     } catch (err) {
       console.error("delete error:", err);
     }
   };
 
-  const handleOpenTerminal = (conn: ConnectionInfo) => {
+  const handleOpenTerminal = (conn: ConnectionSummary) => {
     const target = getTerminalNavigationState(conn.id);
     navigate(target.pathname, { state: target.state });
   };
 
-  const handleOpenConnection = (conn: ConnectionInfo) => {
+  const handleOpenConnection = (conn: ConnectionSummary) => {
     const target = getConnectionPrimaryNavigationState(conn.id);
     navigate(target.pathname, { state: target.state });
   };
 
-  const handleOpenFileTransfer = (conn: ConnectionInfo) => {
+  const handleOpenFileTransfer = (conn: ConnectionSummary) => {
     navigate(getConnectionFileTransferPath(conn.id));
   };
 
@@ -400,7 +397,7 @@ export function Connections() {
 
     setImporting(true);
     try {
-      const result = await invoke<ImportConnectionsResult>(
+      const result = await mutateConnectionCatalog<ImportConnectionsResult>(
         "import_connections_file",
         { path: importPendingPath, password: transferPassword }
       );
@@ -409,7 +406,6 @@ export function Connections() {
         text: `已导入 ${result.importedConnections} 个连接、${result.importedGroups} 个分组；跳过 ${result.skippedConnections} 个连接、${result.skippedGroups} 个分组`,
       });
       resetTransferDialog();
-      await loadData();
     } catch (err) {
       setTransferMessage({
         ok: false,
@@ -420,22 +416,17 @@ export function Connections() {
     }
   };
 
-  const handleToggleImportant = async (conn: ConnectionInfo) => {
+  const handleToggleImportant = async (conn: ConnectionSummary) => {
     try {
-      let fullConn = conn;
-      try {
-        const detail = await invoke<ConnectionInfo>("get_connection", { id: conn.id });
-        if (detail) fullConn = detail;
-      } catch {
-        // fall back to list data
-      }
+      const fullConn = await invoke<ConnectionInfo | null>("get_connection", { id: conn.id });
+      if (!fullConn) throw new Error("连接详情不存在");
       const credentials = buildConnectionCredentials({
         authType: fullConn.authType as ConnectionAuthType,
         password: fullConn.password ?? "",
         privateKey: fullConn.privateKey ?? "",
         privateKeyPassphrase: fullConn.privateKeyPassphrase ?? "",
       });
-      await invoke("update_connection", {
+      await mutateConnectionCatalog("update_connection", {
         request: {
           id: fullConn.id,
           name: fullConn.name,
@@ -450,16 +441,8 @@ export function Connections() {
           isImportant: !(fullConn.isImportant ?? false),
         },
       });
-      setConnections(
-        connections.map((item) =>
-          item.id === conn.id
-            ? { ...item, isImportant: !(fullConn.isImportant ?? false) }
-            : item
-        )
-      );
     } catch (err) {
       console.error("toggle important error:", err);
-      loadData();
     }
   };
 
@@ -493,14 +476,12 @@ export function Connections() {
       return;
     }
 
-    setGroups(nextGroups);
     try {
-      await invoke("reorder_groups", {
+      await mutateConnectionCatalog("reorder_groups", {
         request: { groupIds: nextGroups.map((group) => group.id) },
       });
     } catch (err) {
       console.error("reorder groups error:", err);
-      loadData();
     }
   };
 
@@ -524,9 +505,8 @@ export function Connections() {
       return;
     }
 
-    setConnections(nextConnections);
     try {
-      await invoke("reorder_connections", {
+      await mutateConnectionCatalog("reorder_connections", {
         request: {
           groupId: targetGroupId,
           connectionIds: nextConnections
@@ -540,7 +520,6 @@ export function Connections() {
       });
     } catch (err) {
       console.error("reorder connections error:", err);
-      loadData();
     }
   };
 
@@ -672,12 +651,11 @@ export function Connections() {
 
   const handleSaveGroup = async () => {
     try {
-      await invoke("create_group", {
+      await mutateConnectionCatalog("create_group", {
         request: { name: groupForm.name, color: groupForm.color },
       });
       setGroupDialogOpen(false);
       setGroupForm({ name: "", color: "#3b82f6" });
-      loadData();
     } catch (err) {
       console.error("save group error:", err);
     }

@@ -668,11 +668,7 @@ pub async fn ssh_write(
     session_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let result = manager
-        .get_session(&session_id, |s| s.write(data))
-        .await
-        .ok_or_else(|| "session not found".to_string())?;
-    result
+    manager.write(&session_id, data).await
 }
 
 #[tauri::command]

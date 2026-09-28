@@ -1,4 +1,4 @@
-import type { ConnectionGroup, ConnectionInfo } from "@/store";
+import type { ConnectionGroup, ConnectionSummary } from "@/store";
 
 export const CONNECTIONS_COLLAPSED_GROUPS_STORAGE_KEY =
   "sshx:connections:collapsedGroupIds";
@@ -16,22 +16,22 @@ export interface ConnectionDisplaySection {
   id: string;
   title: string;
   color: string | null;
-  connections: ConnectionInfo[];
+  connections: ConnectionSummary[];
 }
 
 export interface ConnectionAccordionSection extends ConnectionDisplaySection {
   isCollapsed: boolean;
   connectionCount: number;
-  visibleConnections: ConnectionInfo[];
+  visibleConnections: ConnectionSummary[];
 }
 
 export function groupConnectionsForDisplay(
-  connections: ConnectionInfo[],
+  connections: ConnectionSummary[],
   groups: ConnectionGroup[]
 ): ConnectionDisplaySection[] {
-  const connectionsByGroup = new Map<string, ConnectionInfo[]>();
+  const connectionsByGroup = new Map<string, ConnectionSummary[]>();
   const groupIds = new Set(groups.map((group) => group.id));
-  const ungroupedConnections: ConnectionInfo[] = [];
+  const ungroupedConnections: ConnectionSummary[] = [];
 
   for (const group of groups) {
     connectionsByGroup.set(group.id, []);
@@ -106,11 +106,11 @@ export function moveItemById<T>(
 }
 
 export function reorderConnectionsWithinGroup(
-  connections: ConnectionInfo[],
+  connections: ConnectionSummary[],
   groupId: string | null,
   activeId: string,
   overId: string
-): ConnectionInfo[] {
+): ConnectionSummary[] {
   const groupConnections = connections.filter((connection) =>
     groupId === null
       ? connection.groupId === null

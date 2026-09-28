@@ -1,6 +1,6 @@
 use crate::db::group;
 use crate::models::{
-    AuthType, ConnectionExportFile, ConnectionInfo, CreateConnectionRequest,
+    AuthType, ConnectionExportFile, ConnectionInfo, ConnectionSummary, CreateConnectionRequest,
     ImportConnectionsResult, UpdateConnectionRequest, CONNECTION_EXPORT_FILE_VERSION,
 };
 use rusqlite::{params, Connection};
@@ -13,6 +13,32 @@ fn now_timestamp() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+pub fn list_summaries(conn: &Connection) -> Result<Vec<ConnectionSummary>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, host, port, username, auth_type, group_id, \
+         keepalive_interval_secs, keepalive_max, is_important, created_at, updated_at, sort_order \
+         FROM connections ORDER BY sort_order ASC, updated_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ConnectionSummary {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            host: row.get(2)?,
+            port: row.get(3)?,
+            username: row.get(4)?,
+            auth_type: AuthType::from_str(&row.get::<_, String>(5)?),
+            group_id: row.get(6)?,
+            keepalive_interval_secs: row.get::<_, i64>(7)? as u32,
+            keepalive_max: row.get::<_, i64>(8)? as u32,
+            is_important: row.get::<_, i64>(9)? != 0,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+            sort_order: row.get(12)?,
+        })
+    })?;
+    rows.collect()
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<ConnectionInfo>, rusqlite::Error> {
@@ -683,6 +709,109 @@ mod tests {
         assert_eq!(found.port, 2222);
         assert_eq!(found.keepalive_interval_secs, 0);
         assert_eq!(found.keepalive_max, 5);
+    }
+
+    #[test]
+    fn test_list_summaries_excludes_credentials_and_preserves_detail() {
+        let conn = create_test_db();
+        let created = create(
+            &conn,
+            &CreateConnectionRequest {
+                name: "sensitive".into(),
+                host: "example.com".into(),
+                port: 22,
+                username: "root".into(),
+                auth_type: AuthType::KeyPassword,
+                password: Some("secret-password".into()),
+                private_key: Some("private-key".into()),
+                private_key_passphrase: Some("key-secret".into()),
+                group_id: None,
+                keepalive_interval_secs: 30,
+                keepalive_max: 3,
+                is_important: true,
+            },
+        )
+        .unwrap();
+
+        let summaries = list_summaries(&conn).unwrap();
+        assert_eq!(summaries.len(), 1);
+        let json = serde_json::to_value(&summaries[0]).unwrap();
+        for field in ["password", "privateKey", "privateKeyPassphrase"] {
+            assert!(json.get(field).is_none(), "{field} leaked into summary");
+        }
+        assert_eq!(summaries[0].id, created.id);
+        assert_eq!(summaries[0].is_important, true);
+        let detail = get_by_id(&conn, &created.id).unwrap().unwrap();
+        assert_eq!(detail.password.as_deref(), Some("secret-password"));
+        assert_eq!(detail.private_key.as_deref(), Some("private-key"));
+        assert_eq!(detail.private_key_passphrase.as_deref(), Some("key-secret"));
+    }
+
+    #[test]
+    fn test_list_summaries_uses_one_select_for_thousand_rows() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SELECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+        static DECRYPT_COUNT: AtomicUsize = AtomicUsize::new(0);
+        fn count_sql(sql: &str) {
+            if sql.trim_start().starts_with("SELECT") {
+                SELECT_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+            if sql.contains("sshx_decrypt") {
+                DECRYPT_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mut conn = create_test_db();
+        let tx = conn.transaction().unwrap();
+        for index in 0..1000 {
+            tx.execute(
+                "INSERT INTO connections (id, name, host, port, username, auth_type, \
+                 keepalive_interval_secs, keepalive_max, is_important, created_at, updated_at, sort_order) \
+                 VALUES (?1, ?2, 'example.com', 22, 'root', 'password', 30, 3, 0, 1, 1, ?3)",
+                params![index.to_string(), format!("server-{index}"), index],
+            ).unwrap();
+        }
+        tx.commit().unwrap();
+        SELECT_COUNT.store(0, Ordering::SeqCst);
+        DECRYPT_COUNT.store(0, Ordering::SeqCst);
+        conn.trace(Some(count_sql));
+        let summaries = list_summaries(&conn).unwrap();
+        conn.trace(None);
+        assert_eq!(summaries.len(), 1000);
+        assert_eq!(SELECT_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(DECRYPT_COUNT.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[ignore = "手动采集内存数据库摘要序列化大小与查询延迟"]
+    fn profile_connection_summaries() {
+        use std::time::Instant;
+        for row_count in [0, 1000, 10000] {
+            let mut conn = create_test_db();
+            let tx = conn.transaction().unwrap();
+            for index in 0..row_count {
+                tx.execute(
+                    "INSERT INTO connections (id, name, host, port, username, auth_type, \
+                     keepalive_interval_secs, keepalive_max, is_important, created_at, updated_at, sort_order) \
+                     VALUES (?1, ?2, 'example.com', 22, 'root', 'password', 30, 3, 0, 1, 1, ?3)",
+                    params![index.to_string(), format!("server-{index}"), index],
+                ).unwrap();
+            }
+            tx.commit().unwrap();
+            let mut micros = Vec::new();
+            let mut bytes = 0;
+            for _ in 0..50 {
+                let start = Instant::now();
+                let summaries = list_summaries(&conn).unwrap();
+                bytes = serde_json::to_vec(&summaries).unwrap().len();
+                micros.push(start.elapsed().as_micros());
+            }
+            micros.sort_unstable();
+            println!(
+                "summary rows={row_count} json_bytes={bytes} median_us={} p95_us={}",
+                micros[25], micros[47]
+            );
+        }
     }
 
     #[test]

@@ -1,13 +1,13 @@
 //! macOS：使用系统 `/usr/bin/ssh` 与子进程 PTY，替代 russh 协议栈。
 
 use super::lifecycle::{SessionEndGuard, SessionLifecycle};
-use super::{OutputFlow, SessionCmd, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
+use super::{InputSender, OutputFlow, SSH_OUTPUT_CHUNK_BYTES, TRANSFER_CANCELLED_MESSAGE};
 use crate::diagnostic::record_event;
 use crate::models::SshClosePayload;
 use crate::ssh::auth::AuthMethod;
 use crate::ssh::prompt::{AuthPromptManager, AuthPromptPayload, PromptItem};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
@@ -18,8 +18,13 @@ use tokio::sync::mpsc;
 
 const SSH_BIN: &str = "/usr/bin/ssh";
 const SCAN_MAX: usize = 65536;
-const SFTP_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SFTP_PROGRESS_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const SFTP_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const SFTP_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const SFTP_OUTPUT_BLOCKS: usize = 16;
+const OUTPUT_TAIL_BYTES: usize = 4096;
+const SFTP_FINAL_DRAIN_BYTES: usize = 1024 * 1024;
+const SFTP_FINAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 type ProgressProbe = Box<dyn FnMut() -> Option<u64> + Send>;
 type ChildHandle = Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>;
 
@@ -175,7 +180,7 @@ async fn authenticate_pty_with_host_trust(
 
 pub struct SshSession {
     pub id: String,
-    cmd_tx: mpsc::UnboundedSender<SessionCmd>,
+    input: InputSender,
     output_flow: Arc<OutputFlow>,
     lifecycle: SessionLifecycle,
     child: ChildHandle,
@@ -192,16 +197,12 @@ pub struct SshSession {
 }
 
 impl SshSession {
-    pub fn write(&self, data: Vec<u8>) -> Result<(), String> {
-        self.cmd_tx
-            .send(SessionCmd::Data(data))
-            .map_err(|_| "session closed".to_string())
+    pub async fn write(&self, data: Vec<u8>) -> Result<(), String> {
+        self.input.write(data).await
     }
 
     pub fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
-        self.cmd_tx
-            .send(SessionCmd::Resize { cols, rows })
-            .map_err(|_| "session closed".to_string())
+        self.input.resize(cols, rows)
     }
 
     pub fn ready_output(&self) {
@@ -217,6 +218,7 @@ impl SshSession {
     }
 
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.input.close();
         self.output_flow.close();
         self.lifecycle.finish();
         reap_openssh_child(self.child.clone(), Some(self.control_path.clone())).await?;
@@ -225,10 +227,10 @@ impl SshSession {
 
     #[cfg(test)]
     pub fn new_test(id: &str) -> Self {
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
+        let (input, _input_rx, _resize_rx) = InputSender::new(80, 24);
         Self {
             id: id.to_string(),
-            cmd_tx,
+            input,
             output_flow: Arc::new(OutputFlow::new(false)),
             lifecycle: SessionLifecycle::new(),
             child: Arc::new(Mutex::new(None)),
@@ -589,34 +591,44 @@ pub async fn connect_openssh(
     let writer_loop = writer.clone();
     let master_loop = master.clone();
 
-    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
+    let (input, mut input_rx, mut resize_rx) = InputSender::new(cols, rows);
+    let mut writer_closed = lifecycle.subscribe();
+    let writer_end_guard = SessionEndGuard::new(lifecycle.clone());
     tokio::spawn(async move {
-        while let Some(cmd) = cmd_rx.recv().await {
-            match cmd {
-                SessionCmd::Data(d) => {
+        let _end_guard = writer_end_guard;
+        loop {
+            tokio::select! {
+                _ = async { let _ = writer_closed.wait_for(|closed| *closed).await; } => break,
+                chunk = input_rx.recv() => {
+                    let Some(chunk) = chunk else { break; };
                     let w = writer_loop.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let mut g = w.lock().ok()?;
-                        g.write_all(&d).ok()?;
-                        g.flush().ok()?;
-                        Some(())
-                    })
-                    .await;
+                    // Keep the chunk (and byte permit) in the blocking task until write/flush finish.
+                    match tokio::task::spawn_blocking(move || {
+                        let result = (|| {
+                            let mut writer = w.lock().map_err(|e| e.to_string())?;
+                            writer.write_all(&chunk.bytes).map_err(|e| e.to_string())?;
+                            writer.flush().map_err(|e| e.to_string())
+                        })();
+                        let failed = result.is_err();
+                        chunk.finish(result);
+                        failed
+                    }).await {
+                        Ok(false) => {},
+                        _ => break,
+                    }
                 }
-                SessionCmd::Resize { cols, rows } => {
+                changed = resize_rx.changed() => {
+                    if changed.is_err() { break; }
+                    let (cols, rows) = *resize_rx.borrow_and_update();
                     let m = master_loop.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let master = m.lock().ok()?;
-                        master
-                            .resize(PtySize {
-                                rows: rows as u16,
-                                cols: cols as u16,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            })
-                            .ok()
-                    })
-                    .await;
+                    let result = tokio::task::spawn_blocking(move || {
+                        let master = m.lock().map_err(|e| e.to_string())?;
+                        master.resize(PtySize {
+                            rows: rows as u16, cols: cols as u16,
+                            pixel_width: 0, pixel_height: 0,
+                        }).map_err(|e| e.to_string())
+                    }).await;
+                    if !matches!(result, Ok(Ok(()))) { break; }
                 }
             }
         }
@@ -649,7 +661,7 @@ pub async fn connect_openssh(
 
     Ok(SshSession {
         id: session_id.to_string(),
-        cmd_tx,
+        input,
         output_flow,
         lifecycle,
         child,
@@ -766,7 +778,178 @@ fn compact_control_socket_path() -> String {
     format!("/tmp/sshx-{id}.sock")
 }
 
+struct ProgressProbeSchedule {
+    last_meter_at: Instant,
+    last_probe_at: Instant,
+    interval: Duration,
+}
+
+impl ProgressProbeSchedule {
+    fn new(now: Instant, interval: Duration) -> Self {
+        Self {
+            last_meter_at: now,
+            last_probe_at: now,
+            interval,
+        }
+    }
+
+    fn observe_meter(&mut self, now: Instant) {
+        self.last_meter_at = now;
+    }
+
+    fn should_probe(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.last_meter_at) < self.interval
+            || now.duration_since(self.last_probe_at) < self.interval
+        {
+            return false;
+        }
+        self.last_probe_at = now;
+        true
+    }
+}
+
+#[derive(Default)]
+struct SftpOutput {
+    tail: Vec<u8>,
+    line: Vec<u8>,
+}
+
+fn append_bounded_bytes(target: &mut Vec<u8>, bytes: &[u8], limit: usize) {
+    if bytes.len() >= limit {
+        target.clear();
+        target.extend_from_slice(&bytes[bytes.len() - limit..]);
+    } else {
+        let excess = (target.len() + bytes.len()).saturating_sub(limit);
+        target.drain(..excess);
+        target.extend_from_slice(bytes);
+    }
+}
+
+impl SftpOutput {
+    fn consume<F>(
+        &mut self,
+        bytes: &[u8],
+        last_reported: &mut u64,
+        total: u64,
+        progress: &mut F,
+    ) -> bool
+    where
+        F: FnMut(u64),
+    {
+        append_bounded_bytes(&mut self.tail, bytes, OUTPUT_TAIL_BYTES);
+        let mut saw_meter = false;
+        for part in bytes.split_inclusive(|byte| *byte == b'\r' || *byte == b'\n') {
+            append_bounded_bytes(&mut self.line, part, OUTPUT_TAIL_BYTES);
+            if let Some(percent) = parse_sftp_progress_percent(&String::from_utf8_lossy(&self.line))
+            {
+                saw_meter = true;
+                report_progress_bytes(
+                    last_reported,
+                    total,
+                    total.saturating_mul(percent as u64) / 100,
+                    progress,
+                );
+            }
+            if part
+                .last()
+                .is_some_and(|byte| *byte == b'\r' || *byte == b'\n')
+            {
+                self.line.clear();
+            }
+        }
+        saw_meter
+    }
+
+    fn diagnostic(&self) -> String {
+        String::from_utf8_lossy(&self.tail).trim().to_string()
+    }
+}
+
+fn nonblocking_sftp_reader(master: &dyn MasterPty) -> Result<Box<dyn Read + Send>, String> {
+    use nix::fcntl::{fcntl, FcntlArg, OFlag};
+    let fd = master
+        .as_raw_fd()
+        .ok_or_else(|| "SFTP PTY 没有本地文件描述符".to_string())?;
+    let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|error| error.to_string())?;
+    fcntl(
+        fd,
+        FcntlArg::F_SETFL(OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK),
+    )
+    .map_err(|error| format!("设置 SFTP PTY 非阻塞读取失败: {error}"))?;
+    // dup 得到的 reader 共享同一个 open-file description，因此保留 O_NONBLOCK。
+    master
+        .try_clone_reader()
+        .map_err(|error| format!("读取 sftp 输出失败: {error}"))
+}
+
+fn spawn_sftp_output_reader(
+    mut reader: Box<dyn Read + Send>,
+    finish_requested: Arc<AtomicBool>,
+) -> (std_mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
+    let (output_tx, output_rx) = std_mpsc::sync_channel(SFTP_OUTPUT_BLOCKS);
+    let handle = thread::spawn(move || {
+        let mut buf = [0_u8; OUTPUT_TAIL_BYTES];
+        let mut final_started = None;
+        let mut final_bytes = 0;
+        loop {
+            if finish_requested.load(Ordering::Acquire) {
+                let start = final_started.get_or_insert_with(Instant::now);
+                if start.elapsed() >= SFTP_FINAL_DRAIN_TIMEOUT
+                    || final_bytes >= SFTP_FINAL_DRAIN_BYTES
+                {
+                    break;
+                }
+            }
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if final_started.is_some() {
+                        final_bytes += n;
+                    }
+                    if output_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    // 直接子进程已退出：排空已产生的数据即可，无须等仍持有 PTY 的后代 EOF。
+                    if final_started.is_some() {
+                        break;
+                    }
+                    thread::park_timeout(Duration::from_millis(10));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    });
+    (output_rx, handle)
+}
+
 fn run_sftp_with_batch_progress<F>(
+    prefix_args: &[String],
+    destination: &str,
+    batch: &str,
+    total_bytes: u64,
+    cancel_flag: Arc<AtomicBool>,
+    progress_probe: Option<ProgressProbe>,
+    progress: F,
+) -> Result<(), String>
+where
+    F: FnMut(u64),
+{
+    run_sftp_with_batch_progress_interval(
+        prefix_args,
+        destination,
+        batch,
+        total_bytes,
+        cancel_flag,
+        progress_probe,
+        progress,
+        SFTP_PROGRESS_POLL_INTERVAL,
+    )
+}
+
+fn run_sftp_with_batch_progress_interval<F>(
     prefix_args: &[String],
     destination: &str,
     batch: &str,
@@ -774,6 +957,7 @@ fn run_sftp_with_batch_progress<F>(
     cancel_flag: Arc<AtomicBool>,
     mut progress_probe: Option<ProgressProbe>,
     mut progress: F,
+    probe_interval: Duration,
 ) -> Result<(), String>
 where
     F: FnMut(u64),
@@ -781,14 +965,19 @@ where
     const SFTP_BIN: &str = "/usr/bin/sftp";
     let batch_path = std::env::temp_dir().join(format!("sshx-sftp-b-{}.txt", uuid::Uuid::new_v4()));
     std::fs::write(&batch_path, batch).map_err(|e| format!("写入 SFTP 批处理失败: {e}"))?;
+    // 启动失败与正常退出均清理批处理文件。
+    struct BatchFile(std::path::PathBuf);
+    impl Drop for BatchFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _batch_file = BatchFile(batch_path.clone());
     let mut cmd = CommandBuilder::new(SFTP_BIN);
-    let batch_path = batch_path.to_string_lossy().to_string();
-    for arg in build_sftp_batch_args(prefix_args, &batch_path, destination) {
+    for arg in build_sftp_batch_args(prefix_args, &batch_path.to_string_lossy(), destination) {
         cmd.arg(arg);
     }
-
-    let pty_system = native_pty_system();
-    let pair = pty_system
+    let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
             cols: 120,
@@ -796,113 +985,95 @@ where
             pixel_height: 0,
         })
         .map_err(|e| format!("启动 sftp PTY 失败: {e}"))?;
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("读取 sftp 输出失败: {e}"))?;
+    let reader = nonblocking_sftp_reader(pair.master.as_ref())?;
     let mut child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("启动 sftp 失败: {e}"))?;
     drop(pair.slave);
-
-    let (output_tx, output_rx) = std_mpsc::channel();
-    let reader_handle = thread::spawn(move || {
-        let mut buf = [0_u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if output_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    let mut output = String::new();
+    let finish_reader = Arc::new(AtomicBool::new(false));
+    let (output_rx, reader_handle) = spawn_sftp_output_reader(reader, finish_reader.clone());
+    let mut output = SftpOutput::default();
     let mut last_reported = 0_u64;
-    let mut last_probe_at = Instant::now();
-    let status;
+    let mut schedule = ProgressProbeSchedule::new(Instant::now(), probe_interval);
     let mut cancelled = false;
-    loop {
-        drain_sftp_output(
+    let status = loop {
+        if drain_sftp_output(
             &output_rx,
             &mut output,
             &mut last_reported,
             total_bytes,
             &mut progress,
-        );
-
+        ) {
+            schedule.observe_meter(Instant::now());
+        }
         if cancel_flag.load(Ordering::SeqCst) {
             cancelled = true;
             let _ = child.kill();
         }
-
-        if last_probe_at.elapsed() >= SFTP_PROGRESS_POLL_INTERVAL {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!("等待 sftp 结束失败: {error}"));
+            }
+            Ok(None) => {}
+        }
+        if !cancelled && schedule.should_probe(Instant::now()) {
             if let Some(probe) = progress_probe.as_mut() {
                 if let Some(bytes) = probe() {
                     report_progress_bytes(&mut last_reported, total_bytes, bytes, &mut progress);
                 }
             }
-            last_probe_at = Instant::now();
-        }
-
-        match child
-            .try_wait()
-            .map_err(|e| format!("等待 sftp 结束失败: {e}"))?
-        {
-            Some(next_status) => {
-                status = next_status;
-                break;
+            // 探测最多占用 2s；结束后立即重查取消，不再多等一次轮询。
+            if cancel_flag.load(Ordering::SeqCst) {
+                continue;
             }
-            None => thread::sleep(SFTP_WAIT_POLL_INTERVAL),
         }
+        thread::sleep(SFTP_WAIT_POLL_INTERVAL);
+    };
+    finish_reader.store(true, Ordering::Release);
+    reader_handle.thread().unpark();
+    // 非阻塞 reader 有限排空后关闭通道；先消费再 drop/join，避免满队列 send 死锁。
+    while let Ok(bytes) = output_rx.recv() {
+        output.consume(&bytes, &mut last_reported, total_bytes, &mut progress);
     }
+    drop(output_rx);
     let _ = reader_handle.join();
-    drain_sftp_output(
-        &output_rx,
-        &mut output,
-        &mut last_reported,
-        total_bytes,
-        &mut progress,
-    );
-    let _ = std::fs::remove_file(&batch_path);
-    if cancelled {
+    if cancelled || cancel_flag.load(Ordering::SeqCst) {
         return Err(TRANSFER_CANCELLED_MESSAGE.to_string());
     }
-    if status.success() {
+    if status?.success() {
         progress(total_bytes);
         Ok(())
     } else {
         Err(format!(
             "sftp 失败；请确认服务端已启用 SFTP / 路径与权限是否正确。输出: {}",
-            output.trim()
+            output.diagnostic()
         ))
     }
 }
 
 fn drain_sftp_output<F>(
     output_rx: &std_mpsc::Receiver<Vec<u8>>,
-    output: &mut String,
+    output: &mut SftpOutput,
     last_reported: &mut u64,
     total_bytes: u64,
     progress: &mut F,
-) where
+) -> bool
+where
     F: FnMut(u64),
 {
-    while let Ok(bytes) = output_rx.try_recv() {
-        let chunk = String::from_utf8_lossy(&bytes);
-        output.push_str(&chunk);
-        for part in chunk.split(['\r', '\n']) {
-            if let Some(percent) = parse_sftp_progress_percent(part) {
-                let bytes = total_bytes.saturating_mul(percent as u64) / 100;
-                report_progress_bytes(last_reported, total_bytes, bytes, progress);
-            }
-        }
+    let mut saw_meter = false;
+    // 有限消费，持续噪声不能饿死取消与子进程状态检查。
+    for _ in 0..SFTP_OUTPUT_BLOCKS {
+        let Ok(bytes) = output_rx.try_recv() else {
+            break;
+        };
+        saw_meter |= output.consume(&bytes, last_reported, total_bytes, progress);
     }
+    saw_meter
 }
 
 fn report_progress_bytes<F>(last_reported: &mut u64, total_bytes: u64, bytes: u64, progress: &mut F)
@@ -925,9 +1096,82 @@ fn remote_file_size_via_mux(
     destination: &str,
     path: &str,
 ) -> Result<u64, String> {
-    run_ssh_mux_exec_argv(prefix, destination, &["test", "-f", path])?;
-    let out = run_ssh_mux_exec_argv(prefix, destination, &["wc", "-c", path])?;
+    let remote_command = remote_file_size_command(path)?;
+    let mut command = std::process::Command::new(SSH_BIN);
+    command.args(prefix).arg(destination).arg(remote_command);
+    let out = command_output_with_deadline(&mut command, SFTP_PROBE_TIMEOUT)?;
     parse_wc_file_size(&out)
+}
+
+fn remote_file_size_command(path: &str) -> Result<String, String> {
+    use crate::ssh::path_secure::{sh_single_quote, validate_remote_abs_path_for_exec};
+    let path = validate_remote_abs_path_for_exec(path)?;
+    Ok(format!("wc -c < {}", sh_single_quote(&path)))
+}
+
+fn command_output_with_deadline(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> Result<String, String> {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+    // 使用非阻塞 socket 承接 stdout；子进程退出但后代持有输出句柄时同样遵守截止。
+    let (mut output, writer) = UnixStream::pair().map_err(|e| e.to_string())?;
+    output.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let start = Instant::now();
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("执行进度探测失败: {e}"))?;
+    // Command 可以复用，spawn 后必须释放其持有的父进程写端，否则永远读不到 EOF。
+    command.stdout(Stdio::null());
+    let result = (|| {
+        let mut status = None;
+        let mut bytes = Vec::new();
+        let mut eof = false;
+        let mut buf = [0_u8; 4096];
+        loop {
+            if start.elapsed() >= timeout {
+                return Err("进度探测超时".to_string());
+            }
+            if status.is_none() {
+                status = child.try_wait().map_err(|e| format!("进度探测失败: {e}"))?;
+            }
+            // 连续输出也不能饿死截止检查；只保留解析文件大小需要的前 128 字节。
+            for _ in 0..16 {
+                match output.read(&mut buf) {
+                    Ok(0) => {
+                        eof = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        let keep = n.min(128_usize.saturating_sub(bytes.len()));
+                        bytes.extend_from_slice(&buf[..keep]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(format!("读取进度探测失败: {error}")),
+                }
+            }
+            if let Some(status) = status {
+                if !status.success() {
+                    return Err("远程进度探测失败".to_string());
+                }
+                if eof {
+                    return Ok(String::from_utf8_lossy(&bytes).into_owned());
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
 }
 
 fn parse_wc_file_size(output: &str) -> Result<u64, String> {
@@ -1219,6 +1463,177 @@ async fn pty_write_line(writer: &Arc<Mutex<Box<dyn Write + Send>>>, line: &str) 
     .await;
 }
 
+#[derive(Default)]
+struct IncrementalUtf8 {
+    pending: Vec<u8>,
+}
+
+impl IncrementalUtf8 {
+    fn decode(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut decoded = String::new();
+        let mut consumed = 0;
+        while consumed < self.pending.len() {
+            match std::str::from_utf8(&self.pending[consumed..]) {
+                Ok(text) => {
+                    decoded.push_str(text);
+                    consumed = self.pending.len();
+                }
+                Err(error) => {
+                    let valid_end = consumed + error.valid_up_to();
+                    // valid_up_to 保证此前是完整的 UTF-8 字符。
+                    decoded
+                        .push_str(std::str::from_utf8(&self.pending[consumed..valid_end]).unwrap());
+                    consumed = valid_end;
+                    if let Some(invalid_len) = error.error_len() {
+                        decoded.push('\u{fffd}');
+                        consumed += invalid_len;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        self.pending.drain(..consumed);
+        decoded
+    }
+}
+
+fn read_new_log_bytes(
+    file: &mut std::fs::File,
+    offset: &mut u64,
+    max: usize,
+) -> std::io::Result<Vec<u8>> {
+    if file.metadata()?.len() < *offset {
+        *offset = 0;
+    }
+    file.seek(SeekFrom::Start(*offset))?;
+    let mut bytes = Vec::with_capacity(max);
+    file.take(max as u64).read_to_end(&mut bytes)?;
+    *offset += bytes.len() as u64;
+    Ok(bytes)
+}
+
+struct AuthLogChunk {
+    bytes: Vec<u8>,
+    reset: bool,
+}
+
+struct AuthLogStream {
+    rx: mpsc::Receiver<AuthLogChunk>,
+    stopped: Arc<AtomicBool>,
+    finish_requested: Arc<AtomicBool>,
+    reader: Option<thread::JoinHandle<()>>,
+}
+
+impl AuthLogStream {
+    fn open(path: &str) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        let (tx, rx) = mpsc::channel(16);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop_reader = stopped.clone();
+        let finish_requested = Arc::new(AtomicBool::new(false));
+        let finish_reader = finish_requested.clone();
+        let path = path.to_string();
+        let reader = thread::spawn(move || {
+            let mut file: Option<std::fs::File> = None;
+            let mut identity = None;
+            let mut offset = 0;
+            let mut reset = false;
+            while !stop_reader.load(Ordering::Acquire) {
+                // 必须在本轮读取前采样：退出请求到达后至少再检查一次最终文件内容。
+                let finishing = finish_reader.load(Ordering::Acquire);
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    let current_identity = (metadata.dev(), metadata.ino());
+                    if identity != Some(current_identity) || metadata.len() < offset {
+                        // 文件替换或截断后重新打开，不沿用旧 inode/UTF-8 残片。
+                        file = std::fs::File::open(&path).ok();
+                        identity = file
+                            .as_ref()
+                            .and_then(|file| file.metadata().ok())
+                            .map(|metadata| (metadata.dev(), metadata.ino()));
+                        offset = 0;
+                        reset = true;
+                    }
+                    if let Some(file) = file.as_mut() {
+                        match read_new_log_bytes(file, &mut offset, OUTPUT_TAIL_BYTES) {
+                            Ok(bytes) if !bytes.is_empty() => {
+                                if tx.blocking_send(AuthLogChunk { bytes, reset }).is_err() {
+                                    break;
+                                }
+                                reset = false;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if finishing {
+                    break;
+                }
+                thread::park_timeout(Duration::from_millis(45));
+            }
+        });
+        Self {
+            rx,
+            stopped,
+            finish_requested,
+            reader: Some(reader),
+        }
+    }
+}
+
+impl Drop for AuthLogStream {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        // 先关闭接收端，唤醒可能阻塞在满队列上的 blocking_send。
+        self.rx.close();
+        if let Some(reader) = self.reader.take() {
+            reader.thread().unpark();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn_blocking(move || {
+                    let _ = reader.join();
+                });
+            } else {
+                let _ = reader.join();
+            }
+        }
+    }
+}
+
+async fn auth_result_after_child_exit(
+    log_stream: &mut AuthLogStream,
+    decoder: &mut IncrementalUtf8,
+    scan: &mut String,
+    status: portable_pty::ExitStatus,
+) -> Result<bool, String> {
+    log_stream.finish_requested.store(true, Ordering::Release);
+    if let Some(reader) = log_stream.reader.as_ref() {
+        reader.thread().unpark();
+    }
+    let mut authenticated = scan_contains_authenticated(scan);
+    // 子进程已退出，日志不会再由它追加；收到 EOF 表示最终增量已全部交付。
+    // 同时消费满队列，不能先 join 生产者再 drain。
+    while let Some(chunk) = log_stream.rx.recv().await {
+        if chunk.reset {
+            *decoder = IncrementalUtf8::default();
+        }
+        append_scan(scan, &decoder.decode(&chunk.bytes));
+        authenticated |= scan_contains_authenticated(scan);
+    }
+    if authenticated {
+        return Ok(true);
+    }
+    if let Some(reason) = scan_fatal_disconnect(scan) {
+        return Err(format!("SSH 连接失败: {reason}"));
+    }
+    Err(if status.success() {
+        "SSH 进程已退出，认证未成功".to_string()
+    } else {
+        "SSH 进程已退出（认证未成功；请查看诊断日志中的 Permission denied 等详情）".to_string()
+    })
+}
+
 async fn run_auth_until_ready(
     app: AppHandle,
     auth_rx: &mut mpsc::UnboundedReceiver<Vec<String>>,
@@ -1230,23 +1645,30 @@ async fn run_auth_until_ready(
     child: Option<Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>>,
 ) -> Result<bool, String> {
     let mut scan = String::new();
-    let mut log_ofs: usize = 0;
+    let mut log_stream = AuthLogStream::open(log_path);
+    let mut log_decoder = IncrementalUtf8::default();
+    let mut pty_decoder = IncrementalUtf8::default();
     let mut password_sent = false;
     // 最近一次用户已应答的 MFA 首条提示；用于识别缓冲残留导致的重复匹配
     let mut last_answered_mfa_signature: Option<String> = None;
     let start = std::time::Instant::now();
 
     while start.elapsed() < std::time::Duration::from_secs(120) {
-        while let Ok(chunk) = pty_rx.try_recv() {
-            append_scan(&mut scan, &String::from_utf8_lossy(&chunk));
+        // 每轮处理有限块，持续输出不能阻止认证取消/子进程退出检测。
+        for _ in 0..16 {
+            let Ok(chunk) = pty_rx.try_recv() else {
+                break;
+            };
+            append_scan(&mut scan, &pty_decoder.decode(&chunk));
         }
-
-        if let Ok(data) = std::fs::read(log_path) {
-            if data.len() > log_ofs {
-                let piece = String::from_utf8_lossy(&data[log_ofs..]);
-                append_scan(&mut scan, &piece);
-                log_ofs = data.len();
+        for _ in 0..16 {
+            let Ok(chunk) = log_stream.rx.try_recv() else {
+                break;
+            };
+            if chunk.reset {
+                log_decoder = IncrementalUtf8::default();
             }
+            append_scan(&mut scan, &log_decoder.decode(&chunk.bytes));
         }
 
         if scan_contains_authenticated(&scan) {
@@ -1273,23 +1695,21 @@ async fn run_auth_until_ready(
             })
             .await;
             if let Ok(Some(status)) = exited {
-                if !scan_contains_authenticated(&scan) {
-                    if let Some(reason) = scan_fatal_disconnect(&scan) {
-                        record_event(
-                            Some(&app),
-                            "ssh_connect",
-                            format!("OpenSSH 子进程已退出: {reason}"),
-                        );
-                        return Err(format!("SSH 连接失败: {reason}"));
-                    }
-                    let hint = if status.success() {
-                        "SSH 进程已退出，认证未成功".to_string()
-                    } else {
-                        "SSH 进程已退出（认证未成功；请查看诊断日志中的 Permission denied 等详情）"
-                            .to_string()
-                    };
-                    return Err(hint);
+                let result = auth_result_after_child_exit(
+                    &mut log_stream,
+                    &mut log_decoder,
+                    &mut scan,
+                    status,
+                )
+                .await;
+                if let Err(reason) = &result {
+                    record_event(
+                        Some(&app),
+                        "ssh_connect",
+                        format!("OpenSSH 子进程已退出: {reason}"),
+                    );
                 }
+                return result;
             }
         }
 
@@ -1374,7 +1794,10 @@ async fn run_auth_until_ready(
 fn append_scan(scan: &mut String, piece: &str) {
     scan.push_str(piece);
     if scan.len() > SCAN_MAX {
-        let trim = scan.len() - SCAN_MAX;
+        let mut trim = scan.len() - SCAN_MAX;
+        while !scan.is_char_boundary(trim) {
+            trim += 1;
+        }
         scan.drain(..trim);
     }
 }
@@ -1451,15 +1874,13 @@ fn auth_rejection_from_line(t: &str) -> Option<String> {
 }
 
 fn tail_file_for_diagnostic(path: &str, max: usize) -> Option<String> {
-    let data = std::fs::read(path).ok()?;
-    let slice = if data.len() > max {
-        &data[data.len() - max..]
-    } else {
-        &data[..]
-    };
-    String::from_utf8(slice.to_vec())
-        .ok()
-        .map(|s| s.replace('\n', "\\n"))
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(max as u64)))
+        .ok()?;
+    let mut bytes = Vec::with_capacity(max);
+    file.take(max as u64).read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).replace('\n', "\\n"))
 }
 
 fn should_offer_password_prompt(s: &str) -> bool {
@@ -2069,6 +2490,44 @@ mod tests {
     }
 
     #[test]
+    fn sftp_batch_parses_percent_across_chunks() {
+        let (tx, rx) = std_mpsc::channel();
+        tx.send(b"file 42".to_vec()).unwrap();
+        tx.send(b"% 420KB\r".to_vec()).unwrap();
+        let mut output = SftpOutput::default();
+        let mut last = 0;
+        let mut events = Vec::new();
+        drain_sftp_output(&rx, &mut output, &mut last, 100, &mut |n| events.push(n));
+        assert_eq!(events, vec![42]);
+    }
+
+    #[test]
+    fn sftp_batch_retains_only_bounded_error_tail() {
+        let (tx, rx) = std_mpsc::channel();
+        for _ in 0..2560 {
+            tx.send(vec![b'x'; 4096]).unwrap();
+        }
+        let mut output = SftpOutput::default();
+        for _ in 0..160 {
+            drain_sftp_output(&rx, &mut output, &mut 0, 100, &mut |_| {});
+        }
+        assert!(
+            output.tail.len() <= 4096,
+            "tail bytes: {}",
+            output.tail.len()
+        );
+        assert!(output.line.len() <= 4096);
+    }
+
+    #[test]
+    fn auth_scan_bounds_unicode_without_splitting_a_character() {
+        let mut scan = "中".repeat(21845);
+        append_scan(&mut scan, "文");
+        assert!(scan.len() <= SCAN_MAX);
+        assert!(scan.ends_with('文'));
+    }
+
+    #[test]
     fn build_sftp_batch_args_keep_progress_meter_enabled() {
         let args = build_sftp_batch_args(&["-P".into(), "22".into()], "/tmp/batch.txt", "u@h");
 
@@ -2113,7 +2572,7 @@ mod tests {
         });
         let mut events = Vec::new();
 
-        let result = run_sftp_with_batch_progress(
+        let result = run_sftp_with_batch_progress_interval(
             &["-D".into(), "/usr/libexec/sftp-server".into()],
             "dummy",
             "!sleep 1\n",
@@ -2121,12 +2580,436 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             Some(progress_probe),
             |bytes| events.push(bytes),
+            Duration::from_millis(50),
         );
 
         assert!(result.is_ok(), "{result:?}");
         assert!(
             events.iter().any(|bytes| *bytes > 0 && *bytes < 100),
             "{events:?}"
+        );
+    }
+
+    #[test]
+    fn sftp_batch_probe_waits_for_meter_silence_and_is_throttled() {
+        let now = Instant::now();
+        let mut schedule = ProgressProbeSchedule::new(now, Duration::from_secs(3));
+        for tick in 1..=10 {
+            let at = now + Duration::from_millis(tick * 500);
+            schedule.observe_meter(at);
+            assert!(!schedule.should_probe(at));
+        }
+        assert!(!schedule.should_probe(now + Duration::from_millis(7999)));
+        assert!(schedule.should_probe(now + Duration::from_secs(8)));
+        assert!(!schedule.should_probe(now + Duration::from_millis(8500)));
+        assert!(schedule.should_probe(now + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn sftp_batch_probe_quotes_shell_metacharacters_as_file_name() {
+        let root = std::env::temp_dir().join(format!("sshx-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("a b'$(touch INJECTED).txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let command = remote_file_size_command(path.to_str().unwrap()).unwrap();
+        let result = std::process::Command::new("/bin/sh")
+            .current_dir(&root)
+            .args(["-c", &command])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(
+            parse_wc_file_size(&String::from_utf8_lossy(&result.stdout)).unwrap(),
+            5
+        );
+        assert!(!root.join("INJECTED").exists());
+        assert!(remote_file_size_command("relative/path").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sftp_batch_probe_deadline_kills_and_reaps_stalled_child() {
+        let pid_path =
+            std::env::temp_dir().join(format!("sshx-probe-pid-{}", uuid::Uuid::new_v4()));
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "echo $$ > \"$1\"; exec /bin/sleep 20", "probe"])
+            .arg(&pid_path);
+        let start = Instant::now();
+        let error =
+            command_output_with_deadline(&mut command, Duration::from_millis(80)).unwrap_err();
+        assert!(error.contains("超时"), "{error}");
+        assert!(start.elapsed() < Duration::from_millis(500));
+        let pid = std::fs::read_to_string(&pid_path).unwrap();
+        assert!(!std::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::remove_file(pid_path).unwrap();
+    }
+
+    #[test]
+    fn sftp_batch_probe_deadline_covers_stdout_held_by_descendant() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 0.6 & printf 5"]);
+        let start = Instant::now();
+        let result = command_output_with_deadline(&mut command, Duration::from_millis(80));
+        assert!(
+            result.is_err(),
+            "未 EOF 的 stdout 也必须遵守截止: {result:?}"
+        );
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn sftp_batch_probe_drains_large_stdout_without_retaining_it() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "printf '5\\n'; head -c 1048576 /dev/zero"]);
+        let output = command_output_with_deadline(&mut command, SFTP_PROBE_TIMEOUT).unwrap();
+        assert_eq!(parse_wc_file_size(&output).unwrap(), 5);
+        assert!(output.len() <= 128);
+    }
+
+    #[test]
+    fn incremental_auth_log_preserves_split_utf8_and_reads_only_new_bytes() {
+        let path = std::env::temp_dir().join(format!("sshx-log-test-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, [0xe9, 0xaa]).unwrap();
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut offset = 0;
+        let mut decoder = IncrementalUtf8::default();
+        let mut scan = String::new();
+        append_scan(
+            &mut scan,
+            &decoder.decode(&read_new_log_bytes(&mut file, &mut offset, 4096).unwrap()),
+        );
+        assert!(scan.is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"\x8c\xe8\xaf\x81\xe7\xa0\x81: ")
+            .unwrap();
+        append_scan(
+            &mut scan,
+            &decoder.decode(&read_new_log_bytes(&mut file, &mut offset, 4096).unwrap()),
+        );
+        assert_eq!(scan, "验证码: ");
+        assert!(detect_mfa_ui(&scan).is_some());
+        assert!(read_new_log_bytes(&mut file, &mut offset, 4096)
+            .unwrap()
+            .is_empty());
+        assert_eq!(scan.matches("验证码").count(), 1);
+        std::fs::write(&path, b"new").unwrap();
+        assert_eq!(
+            read_new_log_bytes(&mut file, &mut offset, 4096).unwrap(),
+            b"new"
+        );
+        assert_eq!(offset, 3);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn incremental_auth_log_large_input_keeps_scan_bounded() {
+        let path = std::env::temp_dir().join(format!("sshx-log-test-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, vec![b'x'; 10 * 1024 * 1024]).unwrap();
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut offset = 0;
+        let mut scan = String::new();
+        loop {
+            let bytes = read_new_log_bytes(&mut file, &mut offset, 4096).unwrap();
+            if bytes.is_empty() {
+                break;
+            }
+            assert!(bytes.len() <= 4096);
+            append_scan(&mut scan, &String::from_utf8_lossy(&bytes));
+            assert!(scan.len() <= SCAN_MAX);
+        }
+        assert_eq!(offset, 10 * 1024 * 1024);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sftp_batch_output_reader_applies_backpressure_and_unblocks_on_drop() {
+        struct CountedRead(Arc<std::sync::atomic::AtomicUsize>);
+        impl Read for CountedRead {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                bytes.fill(b'x');
+                Ok(bytes.len())
+            }
+        }
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (rx, handle) = spawn_sftp_output_reader(
+            Box::new(CountedRead(reads.clone())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while reads.load(Ordering::SeqCst) < 17 && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(reads.load(Ordering::SeqCst), 17);
+        drop(rx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn sftp_batch_final_reader_exits_when_descendant_holds_pty_and_keeps_tail() {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let reader = nonblocking_sftp_reader(pair.master.as_ref()).unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        // 不把 PTY 设为控制终端，避免内核在会话首进程退出时自动撤销 slave，
+        // 确定性覆盖后代仍持有有效输出句柄的情况。
+        command.set_controlling_tty(false);
+        let ready = std::env::temp_dir().join(format!("sshx-pty-ready-{}", uuid::Uuid::new_v4()));
+        command.args(["-c", "trap '' HUP; (trap '' HUP; printf ready > \"$1\"; /bin/sleep 0.8) & while [ ! -f \"$1\" ]; do /bin/sleep 0.01; done; printf FINAL-TAIL; exit 0", "reader-test"]);
+        command.arg(&ready);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let finish = Arc::new(AtomicBool::new(false));
+        let (rx, handle) = spawn_sftp_output_reader(reader, finish.clone());
+        assert!(child.wait().unwrap().success());
+        let start = Instant::now();
+        finish.store(true, Ordering::Release);
+        handle.thread().unpark();
+        let mut tail = Vec::new();
+        while let Ok(bytes) = rx.recv() {
+            tail.extend(bytes);
+        }
+        drop(rx);
+        handle.join().unwrap();
+        std::fs::remove_file(ready).unwrap();
+        assert!(String::from_utf8_lossy(&tail).contains("FINAL-TAIL"));
+        assert!(
+            start.elapsed() < Duration::from_millis(300),
+            "后代不应阻止读取线程退出: {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn sftp_batch_final_reader_bounds_continuous_noise_before_join() {
+        struct Noise;
+        impl Read for Noise {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                bytes.fill(b'x');
+                Ok(bytes.len())
+            }
+        }
+        let (rx, handle) =
+            spawn_sftp_output_reader(Box::new(Noise), Arc::new(AtomicBool::new(true)));
+        let mut received = 0;
+        while let Ok(bytes) = rx.recv() {
+            received += bytes.len();
+            if received > 1024 * 1024 {
+                break;
+            }
+        }
+        drop(rx);
+        handle.join().unwrap();
+        assert!(
+            received <= 1024 * 1024,
+            "结束请求后的噪声不得无限消费: {received}"
+        );
+    }
+
+    #[test]
+    fn sftp_batch_reader_waits_for_output_then_stops_with_live_pty_writer() {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let reader = nonblocking_sftp_reader(pair.master.as_ref()).unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args([
+            "-c",
+            "trap '' HUP; /bin/sleep 0.04; printf FINAL-TAIL; exec /bin/sleep 20",
+        ]);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let finish = Arc::new(AtomicBool::new(false));
+        let (rx, handle) = spawn_sftp_output_reader(reader, finish.clone());
+        let first = rx.recv_timeout(Duration::from_secs(2));
+        let start = Instant::now();
+        finish.store(true, Ordering::Release);
+        handle.thread().unpark();
+        let mut tail = first.as_ref().cloned().unwrap_or_default();
+        while let Ok(bytes) = rx.recv() {
+            tail.extend(bytes);
+        }
+        drop(rx);
+        handle.join().unwrap();
+        let elapsed = start.elapsed();
+        let writer_still_alive = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(first.is_ok(), "WouldBlock 不应提前关闭读取线程: {first:?}");
+        assert!(String::from_utf8_lossy(&tail).contains("FINAL-TAIL"));
+        assert!(writer_still_alive, "必须在仍有进程持有 PTY 时验证停止");
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "停止耗时: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn exited_ssh_waits_for_paused_reader_final_authenticated_log() {
+        let path = std::env::temp_dir().join(format!("sshx-auth-exit-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"debug1: Authenticated to test\n").unwrap();
+        let child_status = std::process::Command::new("/usr/bin/true")
+            .status()
+            .unwrap();
+        let (release_tx, release_rx) = std_mpsc::sync_channel(0);
+        let (tx, rx) = mpsc::channel(16);
+        let read_path = path.clone();
+        let reader = thread::spawn(move || {
+            release_rx.recv().unwrap();
+            let mut file = std::fs::File::open(read_path).unwrap();
+            let bytes = read_new_log_bytes(&mut file, &mut 0, 4096).unwrap();
+            let _ = tx.blocking_send(AuthLogChunk { bytes, reset: true });
+        });
+        let mut stream = AuthLogStream {
+            rx,
+            stopped: Arc::new(AtomicBool::new(false)),
+            finish_requested: Arc::new(AtomicBool::new(false)),
+            reader: Some(reader),
+        };
+        let mut decoder = IncrementalUtf8::default();
+        let mut scan = String::new();
+        let mut checking = Box::pin(auth_result_after_child_exit(
+            &mut stream,
+            &mut decoder,
+            &mut scan,
+            portable_pty::ExitStatus::with_exit_code(child_status.code().unwrap() as u32),
+        ));
+        let premature = tokio::time::timeout(Duration::from_millis(20), &mut checking).await;
+        release_tx.send(()).unwrap();
+        assert!(
+            premature.is_err(),
+            "reader 未完成前不得判定认证失败: {premature:?}"
+        );
+        assert!(checking.await.unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn exited_ssh_drains_final_log_through_full_queue_and_preserves_authentication() {
+        let path = std::env::temp_dir().join(format!("sshx-auth-final-{}", uuid::Uuid::new_v4()));
+        let mut bytes = b"debug1: Authenticated to test\n".to_vec();
+        bytes.extend(vec![b'x'; 256 * 1024]);
+        std::fs::write(&path, bytes).unwrap();
+        let mut stream = AuthLogStream::open(path.to_str().unwrap());
+        let mut decoder = IncrementalUtf8::default();
+        let mut scan = String::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            auth_result_after_child_exit(
+                &mut stream,
+                &mut decoder,
+                &mut scan,
+                portable_pty::ExitStatus::with_exit_code(0),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(result);
+        assert!(scan.len() <= SCAN_MAX);
+        assert!(
+            !scan_contains_authenticated(&scan),
+            "成功证据被后续输出挤出扫描窗后仍须保留结果"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn exited_ssh_reads_final_failure_before_reporting_error() {
+        let path = std::env::temp_dir().join(format!("sshx-auth-failure-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"Permission denied (publickey).\n").unwrap();
+        let mut stream = AuthLogStream::open(path.to_str().unwrap());
+        let error = auth_result_after_child_exit(
+            &mut stream,
+            &mut IncrementalUtf8::default(),
+            &mut String::new(),
+            portable_pty::ExitStatus::with_exit_code(255),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Permission denied (publickey)"), "{error}");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn incremental_auth_log_reopens_replaced_file_and_closes_full_queue() {
+        let path = std::env::temp_dir().join(format!("sshx-log-stream-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"first").unwrap();
+        let mut stream = AuthLogStream::open(path.to_str().unwrap());
+        let first = stream.rx.blocking_recv().unwrap();
+        assert_eq!(first.bytes, b"first");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        let replacement = stream.rx.blocking_recv().unwrap();
+        assert!(replacement.reset);
+        assert_eq!(replacement.bytes, b"replacement");
+        std::fs::write(&path, vec![b'x'; 10 * 1024 * 1024]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while stream.rx.len() < 16 && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert_eq!(stream.rx.len(), 16);
+        let start = Instant::now();
+        drop(stream);
+        assert!(start.elapsed() < Duration::from_millis(500));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sftp_batch_cancel_during_two_second_probe_returns_cancelled() {
+        if !std::path::Path::new("/usr/libexec/sftp-server").exists() {
+            return;
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let signal = cancelled.clone();
+        let probe: ProgressProbe = Box::new(move || {
+            let signal = signal.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(40));
+                signal.store(true, Ordering::SeqCst);
+            });
+            let mut command = std::process::Command::new("/bin/sleep");
+            command.arg("20");
+            assert!(command_output_with_deadline(&mut command, SFTP_PROBE_TIMEOUT).is_err());
+            None
+        });
+        let start = Instant::now();
+        let result = run_sftp_with_batch_progress_interval(
+            &["-D".into(), "/usr/libexec/sftp-server".into()],
+            "dummy",
+            "!sleep 0.3\n",
+            100,
+            cancelled,
+            Some(probe),
+            |_| {},
+            Duration::from_millis(10),
+        );
+        assert_eq!(result.unwrap_err(), TRANSFER_CANCELLED_MESSAGE);
+        assert!(
+            start.elapsed() < Duration::from_millis(2500),
+            "elapsed: {:?}",
+            start.elapsed()
         );
     }
 

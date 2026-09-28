@@ -1,3 +1,4 @@
+import { createTerminalInputQueue } from "@/lib/terminalInputQueue";
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -39,10 +40,9 @@ import {
 } from "@/components/ssh/AuthPromptDialog";
 import {
   useAppStore,
-  type ConnectionGroup,
-  type ConnectionInfo,
   type SshClosePayload,
 } from "@/store";
+import { loadConnectionCatalog } from "@/lib/connectionCatalog";
 import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
 import {
   clampTerminalScrollbackLines,
@@ -98,8 +98,22 @@ interface TerminalInstance {
   sessionId: string;
   disconnected: boolean;
   reconnecting: boolean;
+  inputQueue: ReturnType<typeof createTerminalInputQueue> | null;
   unlistenOutput: UnlistenFn | null;
   disposed: boolean;
+}
+
+function setupTerminalInput(inst: TerminalInstance, sessionId: string) {
+  inst.inputQueue?.close();
+  inst.inputQueue = createTerminalInputQueue(
+    sessionId,
+    (id, bytes) => invoke("ssh_write", { sessionId: id, data: Array.from(bytes) }),
+    (id, cols, rows) => invoke("ssh_resize", { sessionId: id, cols, rows }),
+    (error) => {
+      if (inst.disposed || inst.sessionId !== sessionId) return;
+      inst.terminal.write(`\r\n\x1b[31m--- 终端输入失败: ${error.message} ---\x1b[0m\r\n`);
+    },
+  );
 }
 
 interface RemoteFileEntry {
@@ -184,9 +198,7 @@ export function TerminalPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const connections = useAppStore((s) => s.connections);
-  const setConnections = useAppStore((s) => s.setConnections);
   const groups = useAppStore((s) => s.groups);
-  const setGroups = useAppStore((s) => s.setGroups);
 
   const isVisible = location.pathname === "/terminal";
 
@@ -276,13 +288,8 @@ export function TerminalPage() {
   }, []);
 
   useEffect(() => {
-    invoke<ConnectionInfo[]>("list_connections")
-      .then(setConnections)
-      .catch(() => {});
-    invoke<ConnectionGroup[]>("list_groups")
-      .then(setGroups)
-      .catch(() => {});
-  }, [setConnections, setGroups]);
+    void loadConnectionCatalog().catch(() => {});
+  }, []);
 
   const refreshTerminalSessionSettings = useCallback(async () => {
     try {
@@ -499,6 +506,7 @@ export function TerminalPage() {
       sessionId,
       (payload) => {
         if (inst.disposed || inst.sessionId !== sessionId) return;
+        inst.inputQueue?.close();
         inst.disconnected = true;
         inst.reconnecting = false;
         writeRemoteClosedNotice(inst.terminal, payload);
@@ -508,6 +516,7 @@ export function TerminalPage() {
       (error) => {
         void disconnectTerminalSession(sessionId).catch(() => {});
         if (inst.disposed || inst.sessionId !== sessionId) return;
+        inst.inputQueue?.close();
         inst.disconnected = true;
         inst.reconnecting = false;
         inst.terminal.write(`\r\n\x1b[31m--- 终端输出失败: ${error} ---\x1b[0m\r\n`);
@@ -522,6 +531,7 @@ export function TerminalPage() {
     async (inst: TerminalInstance) => {
       if (inst.reconnecting || inst.disposed) return;
       inst.reconnecting = true;
+      inst.inputQueue?.close();
       const oldSessionId = inst.sessionId;
       triggerUpdate();
 
@@ -563,6 +573,7 @@ export function TerminalPage() {
           await invoke("ssh_disconnect", { sessionId: returnedId });
           return;
         }
+        setupTerminalInput(inst, returnedId);
         inst.disconnected = false;
         inst.reconnecting = false;
         inst.unlistenOutput = await setupSessionOutput(inst, returnedId);
@@ -576,6 +587,7 @@ export function TerminalPage() {
         void invoke("ssh_disconnect", { sessionId: newSessionId }).catch(() => {});
         if (inst.disposed) return;
         inst.reconnecting = false;
+        inst.inputQueue?.close();
         inst.disconnected = true;
         inst.terminal.write(
           `\r\n\x1b[31m--- 重连失败: ${err} ---\x1b[0m\r\n`
@@ -668,6 +680,7 @@ export function TerminalPage() {
           sessionId,
           disconnected: true,
           reconnecting: false,
+          inputQueue: null,
           unlistenOutput: null,
           disposed: false,
         };
@@ -680,20 +693,14 @@ export function TerminalPage() {
             return;
           }
           if (!inst.disconnected) {
-            invoke("ssh_write", {
-              sessionId: inst.sessionId,
-              data: Array.from(new TextEncoder().encode(data)),
-            }).catch(() => {});
+            // onError renders failures; always handle the returned rejection, including close.
+            void inst.inputQueue?.enqueue(new TextEncoder().encode(data)).catch(() => {});
           }
         });
 
         term.onResize(({ cols, rows }) => {
           if (!inst.disconnected) {
-            invoke("ssh_resize", {
-              sessionId: inst.sessionId,
-              cols,
-              rows,
-            }).catch(() => {});
+            inst.inputQueue?.resize(cols, rows);
           }
         });
 
@@ -732,6 +739,7 @@ export function TerminalPage() {
             await invoke("ssh_disconnect", { sessionId: returnedId });
             return;
           }
+          setupTerminalInput(inst, returnedId);
           inst.disconnected = false;
           inst.unlistenOutput = await setupSessionOutput(inst, returnedId);
           if (inst.disposed) {
@@ -747,6 +755,7 @@ export function TerminalPage() {
           term.write(`\r\n\x1b[31m--- 连接失败 ---\x1b[0m\r\n`);
           term.write(`\x1b[31m${errMsg}\x1b[0m\r\n\r\n`);
           term.write("\x1b[33m按回车键重新连接...\x1b[0m\r\n");
+          inst.inputQueue?.close();
           inst.disconnected = true;
           triggerUpdate();
         } finally {
@@ -813,6 +822,7 @@ export function TerminalPage() {
     const inst = terminals.find((t) => t.id === tabId);
     if (inst) {
       inst.disposed = true;
+      inst.inputQueue?.close();
       inst.unlistenOutput?.();
       inst.terminal.dispose();
       inst.containerEl.remove();

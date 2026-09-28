@@ -39,6 +39,18 @@ export function buildConnectionCredentials(
   }
 }
 
+export function buildEditedConnectionCredentials(
+  input: ConnectionCredentialInput,
+  stored: Partial<ConnectionCredentialFields>
+): ConnectionCredentialFields {
+  return buildConnectionCredentials({
+    ...input,
+    password: input.password || stored.password || "",
+    privateKey: input.privateKey || stored.privateKey || "",
+    privateKeyPassphrase: input.privateKeyPassphrase || stored.privateKeyPassphrase || "",
+  });
+}
+
 export function authTypeLabel(authType: ConnectionAuthType): string {
   switch (authType) {
     case "password":

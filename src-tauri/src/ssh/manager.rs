@@ -79,6 +79,11 @@ impl SessionManager {
         Ok(())
     }
 
+    pub async fn write(&self, id: &str, data: Vec<u8>) -> Result<(), String> {
+        let session = self.session_for_operation(id).await?;
+        session.write(data).await
+    }
+
     pub async fn ready_output(&self, id: &str) -> Result<(), String> {
         let session = self.session_for_operation(id).await?;
         session.ready_output();

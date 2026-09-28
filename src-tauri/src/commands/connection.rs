@@ -4,9 +4,11 @@ use crate::models::*;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
-pub fn list_connections(db: State<'_, Database>) -> Result<Vec<ConnectionInfo>, String> {
+pub fn list_connection_summaries(
+    db: State<'_, Database>,
+) -> Result<Vec<ConnectionSummary>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    db::connection::list_all(&conn).map_err(|e| e.to_string())
+    db::connection::list_summaries(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

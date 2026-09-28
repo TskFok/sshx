@@ -11,7 +11,7 @@ import {
 } from "@/lib/fileTransferTabs";
 import { shouldCloseTerminalTabOnBarClick } from "@/lib/terminalTabBarClick";
 import { cn } from "@/lib/utils";
-import { type ConnectionInfo, useAppStore } from "@/store";
+import { type ConnectionSummary, useAppStore } from "@/store";
 
 export function FileTransferTabBar({
   connections,
@@ -21,7 +21,7 @@ export function FileTransferTabBar({
   onClose,
   onReturnToList,
 }: {
-  connections: ConnectionInfo[];
+  connections: ConnectionSummary[];
   openConnectionIds: string[];
   activeConnectionId: string | null;
   onSelect: (connectionId: string) => void;

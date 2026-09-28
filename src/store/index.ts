@@ -1,15 +1,12 @@
 import { create } from "zustand";
 
-export interface ConnectionInfo {
+export interface ConnectionSummary {
   id: string;
   name: string;
   host: string;
   port: number;
   username: string;
   authType: "password" | "key" | "key_password";
-  password?: string | null;
-  privateKey?: string | null;
-  privateKeyPassphrase?: string | null;
   groupId: string | null;
   /** 客户端 SSH keepalive 间隔（秒），0 表示关闭 */
   keepaliveIntervalSecs: number;
@@ -20,6 +17,12 @@ export interface ConnectionInfo {
   createdAt: number;
   updatedAt: number;
   sortOrder: number;
+}
+
+export interface ConnectionInfo extends ConnectionSummary {
+  password?: string | null;
+  privateKey?: string | null;
+  privateKeyPassphrase?: string | null;
 }
 
 /** 与后端 `SshClosePayload` 一致 */
@@ -48,8 +51,8 @@ interface AppState {
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
 
-  connections: ConnectionInfo[];
-  setConnections: (connections: ConnectionInfo[]) => void;
+  connections: ConnectionSummary[];
+  setConnections: (connections: ConnectionSummary[]) => void;
   groups: ConnectionGroup[];
   setGroups: (groups: ConnectionGroup[]) => void;
 

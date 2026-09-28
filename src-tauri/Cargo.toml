@@ -33,12 +33,16 @@ async-trait = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 portable-pty = "0.8"
+nix = { version = "0.25", default-features = false, features = ["fs"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 hmac = "0.12"
 sha1 = "0.10"
 russh = "0.60"
 russh-sftp = "2"
+
+[dev-dependencies]
+rusqlite = { version = "0.32", features = ["trace"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

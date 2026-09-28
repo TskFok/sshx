@@ -39,6 +39,24 @@ pub struct ConnectionInfo {
     pub sort_order: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionSummary {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_type: AuthType,
+    pub group_id: Option<String>,
+    pub keepalive_interval_secs: u32,
+    pub keepalive_max: u32,
+    pub is_important: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub sort_order: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthType {
@@ -281,7 +299,8 @@ mod ssh_connect_request_tests {
 
     #[test]
     fn output_flow_control_reads_camel_case_true() {
-        let json = r#"{"connectionId":"c","sessionId":"s","cols":80,"rows":24,"outputFlowControl":true}"#;
+        let json =
+            r#"{"connectionId":"c","sessionId":"s","cols":80,"rows":24,"outputFlowControl":true}"#;
 
         let request: SshConnectRequest = serde_json::from_str(json).unwrap();
 

@@ -122,7 +122,6 @@ fn next_whitespace(s: &str, start: usize) -> usize {
 }
 
 /// 将路径放在 POSIX 单引号内，供 `sh -c` 拼接命令使用。
-#[cfg(any(test, not(target_os = "macos")))]
 pub fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }

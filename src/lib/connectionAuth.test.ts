@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   authTypeLabel,
   buildConnectionCredentials,
+  buildEditedConnectionCredentials,
 } from "./connectionAuth";
 
 describe("buildConnectionCredentials", () => {
@@ -50,6 +51,21 @@ describe("buildConnectionCredentials", () => {
       password: "pwd",
       privateKey: "~/.ssh/id_rsa",
       privateKeyPassphrase: null,
+    });
+  });
+});
+
+describe("buildEditedConnectionCredentials", () => {
+  it("retains stored credentials when edit form leaves secrets blank", () => {
+    expect(buildEditedConnectionCredentials({
+      authType: "key_password", password: "", privateKey: "~/.ssh/id_ed25519",
+      privateKeyPassphrase: "",
+    }, {
+      password: "stored-password", privateKey: "~/.ssh/id_ed25519",
+      privateKeyPassphrase: "stored-passphrase",
+    })).toEqual({
+      password: "stored-password", privateKey: "~/.ssh/id_ed25519",
+      privateKeyPassphrase: "stored-passphrase",
     });
   });
 });
