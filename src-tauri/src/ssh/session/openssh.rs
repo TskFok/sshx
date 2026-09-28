@@ -114,7 +114,7 @@ async fn authenticate_pty_with_host_trust(
         run_pty_reader_thread(reader, pty_tx);
         let mut auth_rx = auth_prompts.register(session_id).await;
         let outcome = run_auth_until_ready(
-            app.clone(),
+            Some(app),
             &mut auth_rx,
             session_id,
             auth,
@@ -122,6 +122,10 @@ async fn authenticate_pty_with_host_trust(
             &mut pty_rx,
             &writer,
             Some(child.clone()),
+            |payload| {
+                app.emit(&format!("ssh-auth-prompt-{}", session_id), payload)
+                    .map_err(|e| e.to_string())
+            },
         )
         .await;
         auth_prompts.cancel(session_id).await;
@@ -1635,7 +1639,7 @@ async fn auth_result_after_child_exit(
 }
 
 async fn run_auth_until_ready(
-    app: AppHandle,
+    app: Option<&AppHandle>,
     auth_rx: &mut mpsc::UnboundedReceiver<Vec<String>>,
     session_id: &str,
     auth: &AuthMethod,
@@ -1643,14 +1647,16 @@ async fn run_auth_until_ready(
     pty_rx: &mut mpsc::Receiver<Vec<u8>>,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     child: Option<Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>>,
+    mut emit_prompt: impl FnMut(AuthPromptPayload) -> Result<(), String>,
 ) -> Result<bool, String> {
     let mut scan = String::new();
+    // -E 日志中的 KI 说明（如 Please enter 6 digits.）不是待输入提示。
+    // 状态检测仍保留完整输出，MFA 弹窗只从 PTY 读取，避免一轮认证弹窗两次。
+    let mut prompt_scan = String::new();
     let mut log_stream = AuthLogStream::open(log_path);
     let mut log_decoder = IncrementalUtf8::default();
     let mut pty_decoder = IncrementalUtf8::default();
     let mut password_sent = false;
-    // 最近一次用户已应答的 MFA 首条提示；用于识别缓冲残留导致的重复匹配
-    let mut last_answered_mfa_signature: Option<String> = None;
     let start = std::time::Instant::now();
 
     while start.elapsed() < std::time::Duration::from_secs(120) {
@@ -1659,7 +1665,9 @@ async fn run_auth_until_ready(
             let Ok(chunk) = pty_rx.try_recv() else {
                 break;
             };
-            append_scan(&mut scan, &pty_decoder.decode(&chunk));
+            let text = pty_decoder.decode(&chunk);
+            append_scan(&mut scan, &text);
+            append_scan(&mut prompt_scan, &text);
         }
         for _ in 0..16 {
             let Ok(chunk) = log_stream.rx.try_recv() else {
@@ -1677,7 +1685,7 @@ async fn run_auth_until_ready(
 
         if let Some(reason) = scan_fatal_disconnect(&scan) {
             record_event(
-                Some(&app),
+                app,
                 "ssh_connect",
                 format!("OpenSSH 对端或本地中止: {reason}"),
             );
@@ -1704,7 +1712,7 @@ async fn run_auth_until_ready(
                 .await;
                 if let Err(reason) = &result {
                     record_event(
-                        Some(&app),
+                        app,
                         "ssh_connect",
                         format!("OpenSSH 子进程已退出: {reason}"),
                     );
@@ -1719,31 +1727,14 @@ async fn run_auth_until_ready(
         if let Some(p) = auth.password_for_ki() {
             if should_offer_password_prompt(&scan) && !password_sent {
                 password_sent = true;
-                record_event(Some(&app), "ssh_ki", "OpenSSH: 自动应答密码提示");
+                record_event(app, "ssh_ki", "OpenSSH: 自动应答密码提示");
                 pty_write_line(writer, p).await;
             }
         }
 
-        if let Some((title, instructions, items)) = detect_mfa_ui(&scan) {
-            let sig = items
-                .first()
-                .map(|p| p.prompt.trim().to_string())
-                .unwrap_or_default();
-
-            if last_answered_mfa_signature.as_ref() == Some(&sig) {
-                record_event(
-                    Some(&app),
-                    "ssh_ki",
-                    "OpenSSH: 同一 MFA 提示重复匹配（缓冲残留或堡垒机空轮次），自动发送空行",
-                );
-                pty_write_line(writer, "").await;
-                strip_answered_mfa_prompts_from_scan(&mut scan, &items);
-                last_answered_mfa_signature = None;
-                continue;
-            }
-
+        if let Some((title, instructions, items)) = detect_mfa_ui(&prompt_scan) {
             record_event(
-                Some(&app),
+                app,
                 "ssh_ki",
                 format!(
                     "OpenSSH: MFA 弹窗 prompts={} session={}",
@@ -1751,16 +1742,12 @@ async fn run_auth_until_ready(
                     session_id
                 ),
             );
-            app.emit(
-                &format!("ssh-auth-prompt-{}", session_id),
-                AuthPromptPayload {
-                    session_id: session_id.to_string(),
-                    name: title,
-                    instructions,
-                    prompts: items.clone(),
-                },
-            )
-            .map_err(|e| e.to_string())?;
+            emit_prompt(AuthPromptPayload {
+                session_id: session_id.to_string(),
+                name: title,
+                instructions,
+                prompts: items,
+            })?;
 
             match tokio::time::timeout(std::time::Duration::from_secs(120), auth_rx.recv()).await {
                 Ok(Some(responses)) => {
@@ -1771,9 +1758,9 @@ async fn run_auth_until_ready(
                 Ok(None) => return Err("认证已取消".to_string()),
                 Err(_) => return Err("认证超时 (120s)".to_string()),
             }
-            strip_answered_mfa_prompts_from_scan(&mut scan, &items);
-            clear_mfa_window(&mut scan);
-            last_answered_mfa_signature = Some(sig);
+            // 只消费已经展示的 PTY 文本；后续新提示即使内容相同也需要用户应答。
+            // 不向 OpenSSH 猜测性地发送空行，以免吞掉真实重试或额外认证因子。
+            prompt_scan.clear();
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(45)).await;
@@ -1781,7 +1768,7 @@ async fn run_auth_until_ready(
 
     let tail = tail_file_for_diagnostic(log_path, 4096);
     record_event(
-        Some(&app),
+        app,
         "ssh_connect",
         format!(
             "OpenSSH 认证超时，日志尾部(最多4096字节): {}",
@@ -1912,40 +1899,6 @@ fn scan_contains_passphrase_prompt(s: &str) -> bool {
     s.to_lowercase().contains("enter passphrase for key")
 }
 
-/// 去掉已处理的 MFA 提示行，防止 PTY/日志合并缓冲里残留同一句导致二次弹窗。
-fn strip_answered_mfa_prompts_from_scan(scan: &mut String, items: &[PromptItem]) {
-    for item in items.iter().rev() {
-        strip_one_line_matching_prompt(scan, item.prompt.trim());
-    }
-}
-
-fn strip_one_line_matching_prompt(scan: &mut String, needle: &str) {
-    if needle.is_empty() {
-        return;
-    }
-    let lines: Vec<String> = scan.lines().map(|s| s.to_string()).collect();
-    if lines.is_empty() {
-        return;
-    }
-    for i in (0..lines.len()).rev() {
-        let t = lines[i].trim();
-        if t == needle || t.contains(needle) {
-            let mut out = String::new();
-            for (j, line) in lines.iter().enumerate() {
-                if j == i {
-                    continue;
-                }
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(line);
-            }
-            *scan = out;
-            return;
-        }
-    }
-}
-
 fn detect_mfa_ui(s: &str) -> Option<(String, String, Vec<PromptItem>)> {
     let line = last_interactive_prompt_for_ui(s)?;
     if line.trim_start().to_lowercase().starts_with("debug1:")
@@ -2061,13 +2014,6 @@ fn last_prompt_line(s: &str) -> Option<&str> {
             (t.ends_with(':') || t.ends_with('：')) && t.len() > 3 && t.len() < 256
         })
         .map(str::trim)
-}
-
-fn clear_mfa_window(scan: &mut String) {
-    if scan.len() > 2048 {
-        let keep = scan.len() - 1024;
-        scan.drain(..keep);
-    }
 }
 
 #[cfg(test)]
@@ -3071,20 +3017,12 @@ mod tests {
         let reason = scan_fatal_disconnect(s).expect("应识别认证用尽");
         assert!(reason.contains("已无可用认证方式"));
     }
-
-    #[test]
-    fn strip_mfa_line_removes_stale_prompt() {
-        let mut scan = "header\nPlease enter 6 digits.\ntrailer".to_string();
-        let items = vec![PromptItem {
-            prompt: "Please enter 6 digits.".into(),
-            echo: false,
-        }];
-        strip_answered_mfa_prompts_from_scan(&mut scan, &items);
-        assert!(!scan.contains("Please enter 6 digits"));
-        assert!(scan.contains("header") && scan.contains("trailer"));
-    }
 }
 
 #[cfg(test)]
 #[path = "openssh_benchmark.rs"]
 mod openssh_benchmark;
+
+#[cfg(test)]
+#[path = "openssh_auth_tests.rs"]
+mod auth_tests;
