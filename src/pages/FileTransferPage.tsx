@@ -1459,6 +1459,8 @@ export function FilePanel({
           className={layoutClasses.list}
           viewportRef={viewportRef}
           viewportProps={{
+            // 避免 Radix 的 table 内容层被长文件名撑宽，挤出权限和大小列。
+            className: "[&>div]:!block",
             onScroll: (event) => {
               const top = event.currentTarget.scrollTop;
               setViewport((current) => ({ ...current, top }));
