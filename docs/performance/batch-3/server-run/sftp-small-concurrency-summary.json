@@ -1,0 +1,46 @@
+{
+  "source": "sshx-batch3-sftp-small-concurrency-macos-79c09637-2f9c-44c9-8942-d73857aab3c1.jsonl",
+  "scope": "production-sftp-session-middle-layer-concurrency-diagnostic-only",
+  "variants": [
+    {
+      "concurrencyLimit": 1,
+      "samples": 5,
+      "medianMs": 29839.029708,
+      "minMs": 28982.232541999998,
+      "maxMs": 30692.557083,
+      "allSuccess": true,
+      "allChecksumVerified": true,
+      "allEndedIdle": true,
+      "peakActive": 1,
+      "files": 500,
+      "reductionFromSequentialMedianPercent": 0
+    },
+    {
+      "concurrencyLimit": 2,
+      "samples": 5,
+      "medianMs": 14417.537834,
+      "minMs": 14254.366708,
+      "maxMs": 14735.355042,
+      "allSuccess": true,
+      "allChecksumVerified": true,
+      "allEndedIdle": true,
+      "peakActive": 2,
+      "files": 500,
+      "reductionFromSequentialMedianPercent": 51.68228332124827
+    },
+    {
+      "concurrencyLimit": 4,
+      "samples": 5,
+      "medianMs": 7524.341417000001,
+      "minMs": 7001.585999999999,
+      "maxMs": 8391.8085,
+      "allSuccess": true,
+      "allChecksumVerified": true,
+      "allEndedIdle": true,
+      "peakActive": 4,
+      "files": 500,
+      "reductionFromSequentialMedianPercent": 74.78355867924658
+    }
+  ],
+  "notes": "各5组探索性中位数，无p95；每组100×32KiB，交替1/2/4顺序，不含UI/IPC/DB及checksum时间，未采用默认并发"
+}

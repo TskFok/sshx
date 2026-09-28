@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-09-28T03:20:06.045Z",
+  "source": "sshx-batch3-sftp-macos-0be218e9-2327-4650-8fdb-893ed88168dc.jsonl",
+  "scope": "production-sftp-session-middle-layer",
+  "build": "release",
+  "scenario": "100 x 32KiB upload, serial, authenticated ControlMaster",
+  "sampleCount": 5,
+  "minMs": 31131.935583000002,
+  "medianMs": 32232.143458000002,
+  "maxMs": 36700.889167,
+  "p95Ms": null,
+  "totalBytesPerSample": 3276800,
+  "medianMiBPerSecond": 0.09695290677990503,
+  "checksum": "最后一组远端hash独立校验通过，前4组没有逐组hash；不宣称5组均经散列校验",
+  "note": "5组探索样本不报告p95；不包含AppHandle/DB/前端逐文件刷新"
+}

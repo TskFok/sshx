@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-09-28T04:40:06.134Z",
+  "server": "test-server-1",
+  "before": {
+    "keyExists": true,
+    "controlExists": false
+  },
+  "exitCode": 0,
+  "controlExistsAfter": true,
+  "reason": "前轮结束后空闲超过900秒，专用master按ControlPersist退出；同认证与严格主机校验重建",
+  "strictHostKeyChecking": true,
+  "updateHostKeys": false
+}

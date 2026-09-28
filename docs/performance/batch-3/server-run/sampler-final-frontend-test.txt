@@ -1,0 +1,15 @@
+{"startedAt":"2026-09-28T03:46:42.727Z","cmd":"pnpm","args":["test"]}
+
+> sshx@1.0.0 test /Users/ushopal/workspace/myself/sshx
+> vitest run
+
+
+ RUN  v4.1.9 /Users/ushopal/workspace/myself/sshx
+
+
+ Test Files  38 passed (38)
+      Tests  270 passed (270)
+   Start at  11:46:43
+   Duration  4.56s (transform 3.16s, setup 0ms, import 7.46s, tests 6.64s, environment 1.35s)
+
+{"startedAt":"2026-09-28T03:46:42.727Z","finishedAt":"2026-09-28T03:46:48.189Z","cmd":"pnpm","args":["test"],"elapsedSeconds":5.459242584000001,"exitCode":0,"signal":null}

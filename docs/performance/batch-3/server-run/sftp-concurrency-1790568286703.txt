@@ -1,0 +1,30 @@
+{"startedAt":"2026-09-28T04:04:46.703Z","executable":"/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","args":["-lp","/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","benchmark_production_sftp_small_concurrency","--ignored","--nocapture"],"samples":5,"scope":"production SFTP method diagnostic; no DB/IPC/UI"}
+
+running 1 test
+小文件并发诊断采样文件：sshx-batch3-sftp-small-concurrency-macos-79c09637-2f9c-44c9-8942-d73857aab3c1.jsonl
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_small_concurrency has been running for over 60 seconds
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_small_concurrency ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 224 filtered out; finished in 260.70s
+
+real 261.51
+user 11.23
+sys 13.06
+            12468224  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1472863  page reclaims
+                4710  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+               25512  messages sent
+               51000  messages received
+                   0  signals received
+               34111  voluntary context switches
+              141943  involuntary context switches
+         11102105221  instructions retired
+          8977597644  cycles elapsed
+             4015360  peak memory footprint
+{"startedAt":"2026-09-28T04:04:46.703Z","finishedAt":"2026-09-28T04:09:08.474Z","elapsedSeconds":261.761705625,"exitCode":0,"signal":null,"mode":"concurrency","samples":5,"timeout":false,"psError":false,"rootObserved":true,"observedPeakSftpProcesses":4,"observedPeakRssKiB":40464,"remainingObservedOwnedProcesses":[],"cleanupSignals":[],"notes":"500ms descendant sampling: peak is only observed lower bound; no observed remnants at finish is not proof of no leaks; excludes independently created ControlMaster and unobserved short-lived children; process identity checked with start time and executable; CPU timing includes hashing"}

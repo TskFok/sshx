@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-09-28T04:04:41.177Z",
+  "commit": "0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e",
+  "profile": "release",
+  "compileCommand": "cargo test --release --manifest-path src-tauri/Cargo.toml --locked benchmark_production_sftp_ --no-run",
+  "scope": "production SFTP methods only; does not execute new command/UI queue",
+  "changes": "add bounded 1/2/4 download and two-task cancellation isolation experiments",
+  "files": [
+    {
+      "path": "src-tauri/src/ssh/session/openssh.rs",
+      "sha256": "acd6fa30c6276b26b14b1c56000a7e77d91c2bbb89fcf26491f040716647a3cc"
+    },
+    {
+      "path": "src-tauri/src/ssh/session/openssh_benchmark.rs",
+      "sha256": "c67f17cbd9ae4d8fb5ecd8ced6c260d7a6e1a39156163ab9e28d81c40fa8bd27"
+    },
+    {
+      "path": "src-tauri/Cargo.lock",
+      "sha256": "3567e48cf3dcdef414bf36e60bf60be19330cef1a96511632f482107f5ffdc37"
+    },
+    {
+      "path": "src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf",
+      "sha256": "ce4b05ee4377015b2cec860068fa5aebc1e94dd18613d95151e81da51022e5c3"
+    },
+    {
+      "path": "docs/performance/batch-3/run-diagnostic.mjs",
+      "sha256": "3ee5e82840f65a0496064e3a334cb32343b4b142bae9faf8e6a15a5ecb967617"
+    }
+  ]
+}

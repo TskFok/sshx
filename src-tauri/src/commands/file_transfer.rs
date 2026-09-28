@@ -11,13 +11,14 @@ use crate::ssh::path_secure::{
     join_remote_relative, validate_remote_abs_path_for_exec, validate_remote_relative,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 const FILE_TRANSFER_PROGRESS_EVENT: &str = "file-transfer-progress";
+const TRANSFER_CANCELLED_MESSAGE: &str = "传输已中断";
 
 #[derive(Clone)]
 pub struct TransferCancellationToken {
@@ -25,13 +26,38 @@ pub struct TransferCancellationToken {
 }
 
 impl TransferCancellationToken {
-    #[cfg(test)]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
 
     fn flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancelled)
+    }
+}
+
+struct RegisteredTransfer<'a> {
+    manager: &'a TransferCancellationManager,
+    id: String,
+    token: TransferCancellationToken,
+}
+
+impl RegisteredTransfer<'_> {
+    fn check_cancelled(&self) -> Result<(), String> {
+        if self.token.is_cancelled() {
+            Err(TRANSFER_CANCELLED_MESSAGE.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn flag(&self) -> Arc<AtomicBool> {
+        self.token.flag()
+    }
+}
+
+impl Drop for RegisteredTransfer<'_> {
+    fn drop(&mut self) {
+        let _ = self.manager.unregister(&self.id);
     }
 }
 
@@ -56,6 +82,15 @@ impl TransferCancellationManager {
         let cancelled = Arc::new(AtomicBool::new(false));
         transfers.insert(transfer_id.to_string(), Arc::clone(&cancelled));
         Ok(TransferCancellationToken { cancelled })
+    }
+
+    fn register_scoped(&self, transfer_id: &str) -> Result<RegisteredTransfer<'_>, String> {
+        let token = self.register(transfer_id)?;
+        Ok(RegisteredTransfer {
+            manager: self,
+            id: transfer_id.to_string(),
+            token,
+        })
     }
 
     pub fn cancel(&self, transfer_id: &str) -> Result<bool, String> {
@@ -122,6 +157,7 @@ pub async fn file_transfer_upload(
     request: FileTransferUploadRequest,
 ) -> Result<(), String> {
     validate_transfer_id(&request.transfer_id)?;
+    let transfer = cancellations.register_scoped(&request.transfer_id)?;
     let local = PathBuf::from(&request.local_path);
     if !local.is_file() {
         return Err("本地路径不是已存在的文件".to_string());
@@ -146,17 +182,20 @@ pub async fn file_transfer_upload(
     let remote_dir = validate_remote_abs_path_for_exec(&request.remote_dir)?;
     let remote_path = join_remote_relative(&remote_dir, &file_name)?;
 
-    if !request.overwrite
-        && manager
+    if !request.overwrite {
+        transfer.check_cancelled()?;
+        let exists = manager
             .sftp_remote_path_exists(&request.session_id, &remote_path)
-            .await?
-    {
-        return Err("远程已存在同名文件，请确认覆盖后重试".to_string());
+            .await;
+        transfer.check_cancelled()?;
+        if exists? {
+            return Err("远程已存在同名文件，请确认覆盖后重试".to_string());
+        }
     }
 
+    transfer.check_cancelled()?;
     let started_at = file_transfer::current_time_millis();
-    let cancel_token = cancellations.register(&request.transfer_id)?;
-    if let Err(err) = insert_running_history(
+    insert_running_history(
         &db,
         file_transfer::NewTransferHistory {
             id: request.transfer_id.clone(),
@@ -170,10 +209,7 @@ pub async fn file_transfer_upload(
             total_bytes,
             started_at,
         },
-    ) {
-        let _ = cancellations.unregister(&request.transfer_id);
-        return Err(err);
-    }
+    )?;
 
     let started = Instant::now();
     emit_progress(
@@ -198,7 +234,7 @@ pub async fn file_transfer_upload(
             &file_name,
             &local,
             total_bytes,
-            cancel_token.flag(),
+            transfer.flag(),
             move |bytes| {
                 if progress_gate.should_emit_running(Instant::now()) {
                     emit_running_progress(
@@ -214,7 +250,7 @@ pub async fn file_transfer_upload(
         )
         .await;
 
-    let finish_result = finish_transfer(
+    finish_transfer(
         &app,
         &db,
         &request.transfer_id,
@@ -223,9 +259,7 @@ pub async fn file_transfer_upload(
         started_at,
         started,
         result,
-    );
-    let unregister_result = cancellations.unregister(&request.transfer_id);
-    finish_result.and(unregister_result)
+    )
 }
 
 #[tauri::command]
@@ -237,6 +271,7 @@ pub async fn file_transfer_download(
     request: FileTransferDownloadRequest,
 ) -> Result<(), String> {
     validate_transfer_id(&request.transfer_id)?;
+    let transfer = cancellations.register_scoped(&request.transfer_id)?;
     let remote_path = validate_remote_abs_path_for_exec(&request.remote_path)?;
     let (remote_dir, file_name) = split_remote_file_path(&remote_path)?;
     validate_remote_relative(&file_name)?;
@@ -246,13 +281,14 @@ pub async fn file_transfer_download(
         return Err("本地保存目录不存在".to_string());
     }
     let local_path = local_dir_path.join(&file_name);
-    if local_path.exists() && !request.overwrite {
-        return Err("本地已存在同名文件，请确认覆盖后重试".to_string());
-    }
+    validate_local_download_target(&local_path, request.overwrite)?;
 
-    let total_bytes = manager
+    transfer.check_cancelled()?;
+    let total_bytes_result = manager
         .sftp_remote_file_size(&request.session_id, &remote_path)
-        .await?;
+        .await;
+    transfer.check_cancelled()?;
+    let total_bytes = total_bytes_result?;
     let local_dir = local_dir_path
         .to_str()
         .ok_or_else(|| "本地保存目录不是有效 UTF-8 路径".to_string())?
@@ -262,9 +298,9 @@ pub async fn file_transfer_download(
         .ok_or_else(|| "本地保存路径不是有效 UTF-8 路径".to_string())?
         .to_string();
 
+    transfer.check_cancelled()?;
     let started_at = file_transfer::current_time_millis();
-    let cancel_token = cancellations.register(&request.transfer_id)?;
-    if let Err(err) = insert_running_history(
+    insert_running_history(
         &db,
         file_transfer::NewTransferHistory {
             id: request.transfer_id.clone(),
@@ -278,10 +314,7 @@ pub async fn file_transfer_download(
             total_bytes,
             started_at,
         },
-    ) {
-        let _ = cancellations.unregister(&request.transfer_id);
-        return Err(err);
-    }
+    )?;
 
     let started = Instant::now();
     emit_progress(
@@ -306,7 +339,7 @@ pub async fn file_transfer_download(
             &file_name,
             &local_path,
             total_bytes,
-            cancel_token.flag(),
+            transfer.flag(),
             move |bytes| {
                 if progress_gate.should_emit_running(Instant::now()) {
                     emit_running_progress(
@@ -322,7 +355,7 @@ pub async fn file_transfer_download(
         )
         .await;
 
-    let finish_result = finish_transfer(
+    finish_transfer(
         &app,
         &db,
         &request.transfer_id,
@@ -331,9 +364,7 @@ pub async fn file_transfer_download(
         started_at,
         started,
         result,
-    );
-    let unregister_result = cancellations.unregister(&request.transfer_id);
-    finish_result.and(unregister_result)
+    )
 }
 
 #[tauri::command]
@@ -365,6 +396,17 @@ fn insert_running_history(
     file_transfer::insert_running(&conn, &item).map_err(|e| e.to_string())
 }
 
+fn settle_terminal_result(
+    result: Result<(), String>,
+    changed: bool,
+    emit_first_terminal: impl FnOnce(&Result<(), String>),
+) -> Result<(), String> {
+    if changed {
+        emit_first_terminal(&result);
+    }
+    result
+}
+
 fn finish_transfer(
     app: &AppHandle,
     db: &State<'_, Database>,
@@ -379,57 +421,49 @@ fn finish_transfer(
     let ended_at = started_at + duration_ms;
     let average_speed_bps = ((total_bytes as u128 * 1000) / duration_ms.max(1) as u128) as u64;
 
-    match result {
-        Ok(()) => {
-            {
-                let conn = db.0.lock().map_err(|e| e.to_string())?;
-                file_transfer::mark_success(
-                    &conn,
-                    transfer_id,
-                    ended_at,
-                    duration_ms,
-                    average_speed_bps,
-                )
-                .map_err(|e| e.to_string())?;
-            }
-            emit_progress(
-                app,
+    let changed = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        match &result {
+            Ok(()) => file_transfer::mark_success(
+                &conn,
                 transfer_id,
-                direction,
-                total_bytes,
-                total_bytes,
+                ended_at,
+                duration_ms,
                 average_speed_bps,
-                FileTransferStatus::Success,
-                None,
-            );
-            Ok(())
-        }
-        Err(err) => {
-            {
-                let conn = db.0.lock().map_err(|e| e.to_string())?;
-                file_transfer::mark_failed(
-                    &conn,
-                    transfer_id,
-                    ended_at,
-                    duration_ms,
-                    average_speed_bps,
-                    &err,
-                )
-                .map_err(|e| e.to_string())?;
-            }
-            emit_progress(
-                app,
+            ),
+            Err(err) => file_transfer::mark_failed(
+                &conn,
                 transfer_id,
-                direction,
-                0,
-                total_bytes,
-                0,
-                FileTransferStatus::Failed,
-                Some(err.clone()),
-            );
-            Err(err)
+                ended_at,
+                duration_ms,
+                average_speed_bps,
+                err,
+            ),
         }
-    }
+        .map_err(|e| e.to_string())?
+    };
+    settle_terminal_result(result, changed, |outcome| match outcome {
+        Ok(()) => emit_progress(
+            app,
+            transfer_id,
+            direction,
+            total_bytes,
+            total_bytes,
+            average_speed_bps,
+            FileTransferStatus::Success,
+            None,
+        ),
+        Err(err) => emit_progress(
+            app,
+            transfer_id,
+            direction,
+            0,
+            total_bytes,
+            0,
+            FileTransferStatus::Failed,
+            Some(err.clone()),
+        ),
+    })
 }
 
 fn emit_running_progress(
@@ -583,6 +617,26 @@ fn split_remote_file_path(remote_path: &str) -> Result<(String, String), String>
     Ok((dir.to_string(), name.to_string()))
 }
 
+fn validate_local_download_target(path: &Path, overwrite: bool) -> Result<(), String> {
+    let link_metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err("无法读取本地目标信息".to_string()),
+    };
+    let metadata = if link_metadata.file_type().is_symlink() {
+        std::fs::metadata(path).map_err(|_| "本地目标符号链接无效或不可访问".to_string())?
+    } else {
+        link_metadata
+    };
+    if !metadata.is_file() {
+        return Err("本地目标不是普通文件".to_string());
+    }
+    if !overwrite {
+        return Err("本地已存在同名文件，请确认覆盖后重试".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +748,21 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_terminal_suppresses_event_but_preserves_transfer_error() {
+        let mut emitted = 0;
+        let error = "传输已中断".to_string();
+        let result = settle_terminal_result(Err(error.clone()), false, |_| emitted += 1);
+        assert_eq!(result, Err(error.clone()));
+        assert_eq!(emitted, 0);
+
+        let result = settle_terminal_result(Err(error.clone()), true, |_| emitted += 1);
+        assert_eq!(result, Err(error));
+        assert_eq!(emitted, 1);
+        assert!(settle_terminal_result(Ok(()), false, |_| emitted += 1).is_ok());
+        assert_eq!(emitted, 1);
+    }
+
+    #[test]
     fn split_remote_file_path_rejects_relative_and_root() {
         assert!(split_remote_file_path("relative.txt").is_err());
         assert!(split_remote_file_path("/").is_err());
@@ -701,6 +770,45 @@ mod tests {
             split_remote_file_path("/home/u/a.txt").unwrap(),
             ("/home/u".to_string(), "a.txt".to_string())
         );
+    }
+
+    #[test]
+    fn download_target_requires_real_missing_or_regular_file() {
+        let root =
+            std::env::temp_dir().join(format!("sshx-download-target-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let absent = root.join("absent");
+        assert!(validate_local_download_target(&absent, false).is_ok());
+        let regular = root.join("regular");
+        std::fs::write(&regular, b"old").unwrap();
+        assert!(validate_local_download_target(&regular, false).is_err());
+        assert!(validate_local_download_target(&regular, true).is_ok());
+        let directory = root.join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        assert!(validate_local_download_target(&directory, true).is_err());
+        // NotADirectory 等读取错误不能被当作目标不存在。
+        assert!(validate_local_download_target(&regular.join("child"), true).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_target_preserves_valid_symlink_but_rejects_broken_symlink() {
+        use std::os::unix::fs::symlink;
+        let root =
+            std::env::temp_dir().join(format!("sshx-download-link-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let regular = root.join("regular");
+        std::fs::write(&regular, b"old").unwrap();
+        let valid = root.join("valid-link");
+        symlink(&regular, &valid).unwrap();
+        assert!(validate_local_download_target(&valid, false).is_err());
+        assert!(validate_local_download_target(&valid, true).is_ok());
+        let broken = root.join("broken-link");
+        symlink(root.join("missing-outside"), &broken).unwrap();
+        assert!(validate_local_download_target(&broken, false).is_err());
+        assert!(validate_local_download_target(&broken, true).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -719,8 +827,120 @@ mod tests {
     #[test]
     fn transfer_cancellation_manager_rejects_duplicate_running_transfer() {
         let manager = TransferCancellationManager::new();
-        let _token = manager.register("transfer-1").unwrap();
+        let token = manager.register("transfer-1").unwrap();
 
         assert!(manager.register("transfer-1").is_err());
+        assert!(manager.cancel("transfer-1").unwrap());
+        assert!(token.is_cancelled(), "重复注册不能替换原任务的取消令牌");
+    }
+
+    #[test]
+    fn transfer_cancellation_manager_isolates_ids_and_reused_id() {
+        let manager = TransferCancellationManager::new();
+        let first = manager.register("transfer-a").unwrap();
+        let other = manager.register("transfer-b").unwrap();
+
+        assert!(manager.cancel("transfer-a").unwrap());
+        assert!(manager.cancel("transfer-a").unwrap());
+        assert!(first.is_cancelled());
+        assert!(!other.is_cancelled(), "取消 transfer-a 不得影响 transfer-b");
+
+        manager.unregister("transfer-a").unwrap();
+        manager.unregister("transfer-a").unwrap();
+        assert!(!manager.cancel("transfer-a").unwrap());
+        let replacement = manager.register("transfer-a").unwrap();
+        assert!(!replacement.is_cancelled(), "重新注册必须使用新令牌");
+        assert!(first.is_cancelled(), "旧令牌不能被重置");
+        assert!(manager.cancel("transfer-a").unwrap());
+        assert!(replacement.is_cancelled());
+        assert!(!other.is_cancelled(), "重用 ID 后仍不得影响其他任务");
+    }
+
+    #[tokio::test]
+    async fn scoped_transfer_keeps_cancellation_during_preflight_and_unregisters_on_exit() {
+        let manager = TransferCancellationManager::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let transfer = manager.register_scoped("preflight").unwrap();
+        {
+            let preflight = async {
+                entered_tx.send(()).unwrap();
+                resume_rx.await.unwrap();
+                transfer.check_cancelled()
+            };
+            tokio::pin!(preflight);
+            tokio::select! {
+                result = &mut preflight => panic!("预检不应提前结束: {result:?}"),
+                result = entered_rx => result.unwrap(),
+            }
+            assert!(manager.cancel("preflight").unwrap());
+            resume_tx.send(()).unwrap();
+            assert_eq!(preflight.await.unwrap_err(), "传输已中断");
+        }
+        drop(transfer);
+        assert!(!manager.cancel("preflight").unwrap());
+    }
+
+    #[test]
+    fn scoped_transfer_unregisters_after_early_error() {
+        let manager = TransferCancellationManager::new();
+        let result = (|| -> Result<(), String> {
+            let _transfer = manager.register_scoped("invalid-path")?;
+            Err("本地路径不是已存在的文件".into())
+        })();
+        assert!(result.is_err());
+        assert!(!manager.cancel("invalid-path").unwrap());
+    }
+
+    #[test]
+    fn transfer_history_keeps_separate_terminal_rows_for_ids() {
+        let conn = crate::db::create_test_db();
+        conn.execute(
+            "INSERT INTO connections (
+                id, name, host, port, username, auth_type, created_at, updated_at
+            ) VALUES ('c1', 'Conn', 'example.com', 22, 'user', 'password', 1, 1)",
+            [],
+        )
+        .unwrap();
+        let item = |id: &str, started_at| file_transfer::NewTransferHistory {
+            id: id.to_string(),
+            connection_id: "c1".to_string(),
+            direction: FileTransferDirection::Download,
+            local_path: "/tmp/file.bin".to_string(),
+            local_dir: "/tmp".to_string(),
+            remote_path: "/remote/file.bin".to_string(),
+            remote_dir: "/remote".to_string(),
+            file_name: "file.bin".to_string(),
+            total_bytes: 128,
+            started_at,
+        };
+        file_transfer::insert_running(&conn, &item("cancelled", 10)).unwrap();
+        file_transfer::insert_running(&conn, &item("completed", 11)).unwrap();
+        file_transfer::insert_running(&conn, &item("still-running", 12)).unwrap();
+
+        file_transfer::mark_failed(&conn, "cancelled", 20, 10, 0, "传输已中断").unwrap();
+        file_transfer::mark_success(&conn, "completed", 21, 10, 12_800).unwrap();
+        assert!(
+            file_transfer::insert_running(&conn, &item("cancelled", 13)).is_err(),
+            "已完成的 ID 不能再插入第二条历史"
+        );
+
+        // 一次查询核对所有 ID 的终态；不在任务遍历中查询 SQL。
+        let history = file_transfer::list_for_connection(&conn, "c1", 10).unwrap();
+        assert_eq!(history.len(), 3);
+        let cancelled = history.iter().find(|row| row.id == "cancelled").unwrap();
+        assert!(matches!(cancelled.status, FileTransferStatus::Failed));
+        assert_eq!(cancelled.error_message.as_deref(), Some("传输已中断"));
+        assert_eq!(cancelled.ended_at, Some(20));
+        let completed = history.iter().find(|row| row.id == "completed").unwrap();
+        assert!(matches!(completed.status, FileTransferStatus::Success));
+        assert_eq!(completed.error_message, None);
+        assert_eq!(completed.ended_at, Some(21));
+        let untouched = history
+            .iter()
+            .find(|row| row.id == "still-running")
+            .unwrap();
+        assert!(matches!(untouched.status, FileTransferStatus::Running));
+        assert_eq!(untouched.ended_at, None);
     }
 }

@@ -230,6 +230,38 @@ describe("FileTransferPage", () => {
     expect(entries[0].size).toBe(0);
   });
 
+  it("并发下载分别显示各目标大小，不把其他目录进度覆盖当前行", () => {
+    const html = renderToStaticMarkup(React.createElement(FilePanel, {
+      title: "本地文件", icon: Server,
+      snapshot: { cwd: "/tmp", entries: [
+        { name: "a.bin", path: "/tmp/a.bin", isDirectory: false, size: 0 },
+        { name: "b.bin", path: "/tmp/b.bin", isDirectory: false, size: 0 },
+      ] },
+      sizeOverlays: [
+        { targetDir: "/tmp", fileName: "a.bin", bytesTransferred: 8 },
+        { targetDir: "/tmp", fileName: "b.bin", bytesTransferred: 12 },
+        { targetDir: "/other", fileName: "a.bin", bytesTransferred: 999 },
+      ],
+      loading: false, selectedPaths: [], pathValue: "/tmp", onPathChange: () => {},
+      onPathSubmit: () => {}, pathDisabled: false, pathSubmitDisabled: false,
+      searchValue: "", onSearchChange: () => {}, onSelect: () => {}, onRefresh: () => {},
+      onParent: () => {}, parentDisabled: false, footer: null,
+    }));
+    expect(html).toMatch(/a\.bin<\/span><span[^>]*>8 B<\/span>/);
+    expect(html).toMatch(/b\.bin<\/span><span[^>]*>12 B<\/span>/);
+  });
+
+  it("尚未执行的队列项显示等待状态和独立取消按钮", () => {
+    const html = renderToStaticMarkup(React.createElement(HistoryRow, {
+      name: "queued.bin", direction: "download", status: "running", queued: true,
+      localDir: "/tmp", remoteDir: "/srv", totalBytes: 0, progress: 0, speedBps: 0,
+      durationMs: null, errorMessage: null, onLocalDir: () => {}, onRemoteDir: () => {},
+      onCancelTransfer: () => {},
+    }));
+    expect(html).toContain("等待中");
+    expect(html).toContain('aria-label="中断传输 queued.bin"');
+  });
+
   it("历史刷新失败时用最后终态显示取消消息", () => {
     const html = renderToStaticMarkup(
       React.createElement(TransferHistoryFallbackRow, {

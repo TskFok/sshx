@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-09-28T03:46:42.727Z",
+  "finishedAt": "2026-09-28T03:46:48.189Z",
+  "cmd": "pnpm",
+  "args": [
+    "test"
+  ],
+  "elapsedSeconds": 5.459242584000001,
+  "exitCode": 0,
+  "signal": null
+}

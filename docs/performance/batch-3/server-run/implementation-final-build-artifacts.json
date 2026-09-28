@@ -1,0 +1,199 @@
+{
+  "recordedAt": "2026-09-28T05:10:55.124Z",
+  "commit": "0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e",
+  "branch": "main",
+  "profile": "release",
+  "signed": false,
+  "defaultTransferLimit": 1,
+  "buildCommand": "env -u VITE_SSHX_TRANSFER_LIMIT pnpm tauri build --bundles app --no-sign --ci -- --locked",
+  "sourceFiles": [
+    {
+      "path": "src/lib/fileTransferQueue.ts",
+      "bytes": 5680,
+      "sha256": "8006d1438b647f1d4a0a19084f8b627e6a08842af9b50cea43fab8f2d9272577"
+    },
+    {
+      "path": "src/lib/fileTransferProgress.ts",
+      "bytes": 7118,
+      "sha256": "48ad696448e0c4354e5b973ccdc0524ace92ab3b5de4636860730ce16a568afa"
+    },
+    {
+      "path": "src/pages/FileTransferPage.tsx",
+      "bytes": 63614,
+      "sha256": "6cd173c767dc9002a76c5e0a02f9ca7ec3d0d09d0061925db7a8866ab224a5ae"
+    },
+    {
+      "path": "src-tauri/src/commands/file_transfer.rs",
+      "bytes": 32453,
+      "sha256": "8f25ff4417531f8d357e25150e5464fcf878e85d380b32695a487c8285ce5e51"
+    },
+    {
+      "path": "src-tauri/src/commands/transfer_targets.rs",
+      "bytes": 11975,
+      "sha256": "21677d1b28f1f9c23307d2af845f39d8075f4062b8cefbd95a4b49851b6d9d14"
+    },
+    {
+      "path": "src-tauri/src/db/file_transfer.rs",
+      "bytes": 15503,
+      "sha256": "3e3cf07d8332b05e5810d4c158fa227f62233fa6aba9912faea0233e4ff2c216"
+    },
+    {
+      "path": "src-tauri/src/commands/mod.rs",
+      "bytes": 175,
+      "sha256": "4bc00db40cf323504e86df5e87530573104fe6dba02b3fbab72ff137cb6b3f51"
+    },
+    {
+      "path": "src-tauri/src/lib.rs",
+      "bytes": 3854,
+      "sha256": "843e294790b1ae91a14448a9c4a3b7d05dee4c0d703c60b5d8e1b46182cbfbc7"
+    },
+    {
+      "path": "src-tauri/src/ssh/session/openssh.rs",
+      "bytes": 109189,
+      "sha256": "acd6fa30c6276b26b14b1c56000a7e77d91c2bbb89fcf26491f040716647a3cc"
+    },
+    {
+      "path": "src-tauri/src/ssh/session/openssh_benchmark.rs",
+      "bytes": 57465,
+      "sha256": "c67f17cbd9ae4d8fb5ecd8ced6c260d7a6e1a39156163ab9e28d81c40fa8bd27"
+    },
+    {
+      "path": "src-tauri/Cargo.lock",
+      "bytes": 184711,
+      "sha256": "3567e48cf3dcdef414bf36e60bf60be19330cef1a96511632f482107f5ffdc37"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "bytes": 117042,
+      "sha256": "8325f3126a8396ce7929479679dd068a538efb36b44c6db4ef1656621fa330f4"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "dist/index.html",
+      "bytes": 665,
+      "sha256": "ee90d50ee36eb47c272688ac08d2fa9fd12bc1f2e5de628cd44a104e90e981b4"
+    },
+    {
+      "path": "dist/assets/Connections-k0x_KlU2.js",
+      "bytes": 27683,
+      "sha256": "b0b4b53fe81f92626bd793c8e375289aaa95043bd31a31acc8d35ef6dc92b307"
+    },
+    {
+      "path": "dist/assets/Dashboard-CjQRHfod.js",
+      "bytes": 4646,
+      "sha256": "024f9193a62486232cf0da06869dd4ff06717db0794212ad0fabbce6ac7c6c2b"
+    },
+    {
+      "path": "dist/assets/Diagnostics-C_pM1B_O.js",
+      "bytes": 4616,
+      "sha256": "2c8d5f621d5f1424d11e8353c409b302fe5e062e709c92f1194adc82c00074e5"
+    },
+    {
+      "path": "dist/assets/FileTransferWorkspace-Cpn5uROw.js",
+      "bytes": 37807,
+      "sha256": "b9ed84925c341bf8e7a4441bd622df33cdcc7704776ba5148777e8f8e9b0d7d6"
+    },
+    {
+      "path": "dist/assets/Settings-BnaHSm6s.js",
+      "bytes": 11713,
+      "sha256": "cf17c50688c027695151c8ad8bb9602403e7ae3fa792db46b543dfad1d5fdef8"
+    },
+    {
+      "path": "dist/assets/TerminalPage-9RQJ1adl.css",
+      "bytes": 3125,
+      "sha256": "c286e6da42634569e4eea916af0846235db92ba61c5c26738bf75151c79621c5"
+    },
+    {
+      "path": "dist/assets/TerminalPage-DEA7Xedr.js",
+      "bytes": 310889,
+      "sha256": "bfdb19e0b04e4d7a846af1589547e783716b5ed514e63a0556ec07718f8897d4"
+    },
+    {
+      "path": "dist/assets/button-zLnuGEfV.js",
+      "bytes": 32367,
+      "sha256": "8f79459d49f349e6877352235d307f8330eb1cbebda719a141b15cd9738d1b84"
+    },
+    {
+      "path": "dist/assets/card-HRy1t4xs.js",
+      "bytes": 1033,
+      "sha256": "ef131bc86829d4a79798639cd1639ba4229edf62c9ea5b77592664332d32c777"
+    },
+    {
+      "path": "dist/assets/connectionGroups-C0I6haag.js",
+      "bytes": 1933,
+      "sha256": "364395682cd3fcd50590c955a0e2fb718050b3eedbdb7e7b751231dadc322d5e"
+    },
+    {
+      "path": "dist/assets/connectionNavigation-D0hgYWd9.js",
+      "bytes": 1235,
+      "sha256": "b46ea4fb29dde125c4cf7fb7de87fc1b1af5cab0ebc77f3da4a2f7626250b427"
+    },
+    {
+      "path": "dist/assets/core-mzEiFk5C.js",
+      "bytes": 136699,
+      "sha256": "3e997b0616e3bfdc3ef48488174bcde722edb73cda91559ff14787a525d0f7f7"
+    },
+    {
+      "path": "dist/assets/index-2bi9Ju9D.css",
+      "bytes": 37288,
+      "sha256": "9d7e5da3894e422112cb76d601c12cb03f88aa524544b339ec1caef46b8ed4cc"
+    },
+    {
+      "path": "dist/assets/index-CeQp3-za.js",
+      "bytes": 164576,
+      "sha256": "211c1c7eed0673c5e9d907af96fd920993af2a59437b9bcca7ff7389686d1e6d"
+    },
+    {
+      "path": "dist/assets/label-8rOA9bZk.js",
+      "bytes": 2057,
+      "sha256": "c591da44d4bfdf4ed069174402d55f7869b70ecab08abf06a311ff6e41a60342"
+    },
+    {
+      "path": "dist/assets/plus-Cfb98PHx.js",
+      "bytes": 143,
+      "sha256": "9733fca7d838e34d31a808207b1fe6644bffcbcfe1ebee18ae00387b77a903a0"
+    },
+    {
+      "path": "dist/assets/refresh-cw-CRm2b3vL.js",
+      "bytes": 310,
+      "sha256": "7537e38fa16aea55dc362b20faabd7e1bcf174a521a839ce170ebb914697a27d"
+    },
+    {
+      "path": "dist/assets/select-BbcvnElz.js",
+      "bytes": 20743,
+      "sha256": "b189f0c4000b1b3a7c8da8677ef0e7b4f4feeecf3130d4e558dd2091f6f31e68"
+    },
+    {
+      "path": "dist/assets/settingsEvents-BlwEMYmb.js",
+      "bytes": 10409,
+      "sha256": "950c3fa5e45be3b051ef4f4d155d26bf3353a24e6ba800edf330b66a82dd373e"
+    },
+    {
+      "path": "dist/assets/star-jaEFBfHl.js",
+      "bytes": 462,
+      "sha256": "6fb6c73291adae66082ce2279d8b652a910362b9cca79f50c8eaf99025083b7b"
+    },
+    {
+      "path": "dist/assets/terminalTabBarClick-BZu-cWOv.js",
+      "bytes": 1406,
+      "sha256": "148fa04c5011fe8a0ec4ffb13e172e42335b1754e0125a680a091de7db8b9962"
+    },
+    {
+      "path": "dist/assets/trash-2-BrjC_-Dx.js",
+      "bytes": 347,
+      "sha256": "423403bce04f0e98431b0e8184710d8058d13353d660faf7998a34408be43ee1"
+    },
+    {
+      "path": "src-tauri/target/release/bundle/macos/SSHX.app/Contents/MacOS/sshx",
+      "bytes": 15949984,
+      "sha256": "6f56078d086aa45dfdd32c71e784385420585696b7fa35a78148976a9aa242d4"
+    },
+    {
+      "path": "src-tauri/target/release/bundle/macos/SSHX.app/Contents/Info.plist",
+      "bytes": 949,
+      "sha256": "8d1bc16f05fdb4db8a22d56b1fe5f04839843e929aacc1aa60b4a549ac59794f"
+    }
+  ],
+  "notes": "本轮产品实现最终默认构建；与早期采样器及TerminalPage冒烟构建区分；未提交的当前工作区源码"
+}

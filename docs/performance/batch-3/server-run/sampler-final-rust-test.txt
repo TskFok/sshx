@@ -1,0 +1,241 @@
+{"startedAt":"2026-09-28T03:46:42.728Z","cmd":"cargo","args":["test","--manifest-path","src-tauri/Cargo.toml","--locked"]}
+   Compiling sshx v1.0.0 (/Users/ushopal/workspace/myself/sshx/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.69s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/sshx_lib-dbc66081718b8eaf)
+
+running 213 tests
+test commands::file_transfer::tests::cancelled_transfer_failure_preserves_error_message ... ok
+test commands::connection::tests::test_build_encrypted_export_rejects_empty_password ... ok
+test commands::file_transfer::tests::short_transfer_can_report_success_after_running_is_throttled ... ok
+test commands::file_transfer::tests::split_remote_file_path_rejects_relative_and_root ... ok
+test commands::file_transfer::tests::transfer_cancellation_manager_marks_registered_transfer_cancelled ... ok
+test commands::file_transfer::tests::transfer_cancellation_manager_rejects_duplicate_running_transfer ... ok
+test commands::file_transfer::tests::zero_byte_success_reports_complete ... ok
+test commands::settings::scrollback_tests::clamp_terminal_scrollback_lines_respects_bounds ... ok
+test commands::settings::scrollback_tests::clamp_terminal_wallpaper_opacity_respects_bounds ... ok
+test commands::connection::tests::read_export_snapshot_returns_without_holding_database_lock ... ok
+test commands::file_transfer::tests::file_transfer_list_local_dir_keeps_sorting_and_errors ... ok
+test commands::settings::scrollback_tests::update_settings_persists_clamped_scrollback_and_wallpaper_opacity ... ok
+test commands::settings::scrollback_tests::diagnostic_capture_changes_only_after_success_and_lock_release ... ok
+test commands::transfer_progress::tests::running_event_budget_is_ten_per_second_for_frequent_callbacks ... ok
+test commands::transfer_progress::tests::running_progress_gates_are_independent ... ok
+test commands::connection::tests::export_releases_database_lock_before_blocking_work ... ok
+test commands::transfer_progress::tests::running_progress_has_a_per_transfer_time_budget ... ok
+test crypto::tests::test_base64_roundtrip ... ok
+test commands::settings::scrollback_tests::write_settings_inserts_and_updates_ten_keys_without_touching_unknown_key ... ok
+test db::connection::tests::profile_connection_summaries ... ignored, 手动采集内存数据库摘要序列化大小与查询延迟
+test commands::settings::scrollback_tests::write_settings_failure_keeps_every_previous_value ... ok
+test commands::file_transfer::tests::file_transfer_list_local_dir_does_not_block_runtime ... ok
+test db::connection::tests::saved_credentials_are_encrypted_and_roundtrip ... ok
+test db::connection::tests::test_create_and_list ... ok
+test db::connection::tests::test_create_list_and_update_preserve_important_marker ... ok
+test db::connection::tests::test_create_appends_connection_sort_order_within_group ... ok
+test db::connection::tests::test_delete ... ok
+test db::connection::tests::test_get_by_id ... ok
+test db::connection::tests::test_export_all_includes_groups_and_connections ... ok
+test db::connection::tests::test_list_summaries_excludes_credentials_and_preserves_detail ... ok
+test db::connection::tests::test_import_all_skips_existing_connection_and_maps_same_name_group ... ok
+test db::connection::tests::test_update ... ok
+test db::connection::tests::test_reorder_connections_updates_only_target_group ... ok
+test db::credentials::tests::ciphertext_is_authenticated_and_bound_to_row_and_field ... ok
+test db::connection::tests::test_update_connection_group_appends_to_new_group ... ok
+test db::credentials::tests::decrypted_query_results_never_use_file_backed_temporary_storage ... ok
+test db::credentials::tests::failed_key_write_preserves_legacy_data ... ok
+test db::connection::tests::test_list_summaries_uses_one_select_for_thousand_rows ... ok
+test db::credentials::tests::migrates_delete_database_and_erases_old_freelist ... ok
+test db::credentials::tests::interrupted_cleanup_is_retried_without_reencrypting ... ok
+test db::credentials::tests::missing_key_does_not_generate_replacement_or_change_ciphertext ... ok
+test db::credentials::tests::unavailable_store_preserves_legacy_data ... ok
+test db::credentials::tests::startup_rejects_credentials_swapped_between_fields ... ok
+test db::credentials::tests::wrong_key_and_invalid_key_length_fail_without_rewriting_data ... ok
+test db::file_transfer::tests::benchmark_history_query_index_before_after ... ignored, release benchmark; run with --ignored --nocapture
+test db::credentials::tests::update_and_import_encrypt_values_using_destination_row_identity ... ok
+test db::credentials::tests::migrates_wal_database_and_erases_old_freelist ... ok
+test db::file_transfer::tests::history_query_uses_connection_started_index_without_temp_sort ... ok
+test db::file_transfer::tests::history_query_limits_and_isolates_connections_in_descending_time_order ... ok
+test db::file_transfer::tests::insert_update_and_list_history ... ok
+test db::group::tests::test_create_appends_group_sort_order ... ok
+test db::group::tests::test_create_and_list_groups ... ok
+test db::group::tests::test_reorder_groups_updates_sort_order ... ok
+test db::group::tests::test_delete_group ... ok
+test db::group::tests::test_update_group ... ok
+test db::migration::tests::history_index_has_connection_then_descending_start_and_is_idempotent ... ok
+test db::migration::tests::test_connections_has_keepalive_columns ... ok
+test db::migration::tests::test_file_transfer_history_table_exists_and_running_rows_are_recovered ... ok
+test db::migration::tests::test_important_marker_column_exists_with_default ... ok
+test db::migration::tests::test_migrations_idempotent ... ok
+test db::migration::tests::test_run_migrations ... ok
+test db::migration::tests::test_sort_order_migration_backfills_existing_rows ... ok
+test db::migration::tests::test_sort_order_columns_exist ... ok
+test diagnostic::tests::application_logs_remain_eligible_at_all_levels ... ok
+test diagnostic::tests::buffer_respects_cap ... ok
+test diagnostic::tests::clear_empties ... ok
+test diagnostic::tests::dependency_errors_and_warnings_are_captured ... ok
+test diagnostic::tests::record_event_skips_when_capture_disabled ... ok
+test diagnostic::tests::unrelated_dependency_logs_are_not_captured ... ok
+test diagnostic::tests::verbose_dependency_logs_are_not_captured ... ok
+test models::ssh_connect_request_tests::output_flow_control_defaults_to_disabled_for_existing_callers ... ok
+test models::tests::test_auth_type_key_password_json ... ok
+test models::tests::test_auth_type_roundtrip ... ok
+test models::ssh_connect_request_tests::output_flow_control_reads_camel_case_true ... ok
+test models::tests::test_connection_request_json_omits_keepalive_uses_default ... ok
+test ssh::auth::tests::macos_prepare_key_password_returns_path_and_password ... ok
+test ssh::auth::tests::test_expand_tilde ... ok
+test ssh::auth::tests::macos_prepare_key_returns_path ... ok
+test ssh::auth::tests::test_expand_tilde_no_tilde ... ok
+test ssh::auth::tests::test_password_for_ki ... ok
+test ssh::auth::tests::test_prepare_auth_key_missing_path ... ok
+test ssh::auth::tests::test_prepare_auth_key_nonexistent_file ... ok
+test ssh::auth::tests::test_prepare_auth_key_password_missing_key ... ok
+test ssh::auth::tests::test_prepare_auth_key_password_missing_password ... ok
+test ssh::auth::tests::test_prepare_auth_password_missing ... ok
+test ssh::auth::tests::test_prepare_auth_password ... ok
+test ssh::host_key_prompt::tests::aborting_an_active_confirmation_future_removes_its_prompt ... ok
+test ssh::host_key_prompt::tests::cancellation_blocks_an_already_accepted_key_before_persistence ... ok
+test ssh::host_key_prompt::tests::confirmation_is_bound_to_one_request_and_consumed_once ... ok
+test ssh::host_key_prompt::tests::disarmed_guard_keeps_successful_connection_available_for_rekey ... ok
+test ssh::host_key_prompt::tests::dropped_connect_future_cancels_detached_host_key_callback ... ok
+test ssh::host_key_prompt::tests::dropped_connection_removes_only_its_own_prompt ... ok
+test ssh::host_key_prompt::tests::connect_timeout_cancels_detached_confirmation_and_prevents_late_prompts ... ok
+test ssh::host_key_prompt::tests::pending_prompts_keep_registration_order_when_new_requests_arrive ... ok
+test ssh::host_key_prompt::tests::expired_response_is_rejected_even_before_waiter_is_polled ... ok
+test ssh::host_key_prompt::tests::rejection_and_timeout_fail_closed_and_remove_prompts ... ok
+test ssh::manager::tests::late_ack_after_session_removal_is_harmless ... ok
+test ssh::manager::tests::concurrent_disconnects_are_idempotent ... ok
+test ssh::manager::tests::old_instance_cannot_remove_replacement_with_same_id ... ok
+test ssh::manager::tests::session_finished_before_registration_is_reclaimed ... ok
+test ssh::manager::tests::session_handle_does_not_hold_session_table_lock ... ok
+test ssh::manager::tests::test_session_manager_new ... ok
+test ssh::path_secure::tests::is_subpath_equal_and_children ... ok
+test ssh::path_secure::tests::join_ok_simple ... ok
+test ssh::path_secure::tests::join_trims_base_trailing_slash ... ok
+test ssh::path_secure::tests::parse_ls_1ap_dirs_and_files ... ok
+test ssh::path_secure::tests::parse_ls_ln_ap_reads_file_sizes ... ok
+test ssh::path_secure::tests::rejects_absolute_relative ... ok
+test ssh::path_secure::tests::rejects_dotdot ... ok
+test ssh::path_secure::tests::rejects_empty_relative ... ok
+test ssh::path_secure::tests::single_quote_escapes_embedded_quotes ... ok
+test ssh::path_secure::tests::skips_dot_components_in_relative ... ok
+test ssh::path_secure::tests::validate_relative_accepts_nested ... ok
+test ssh::prompt::tests::test_cancel_closes_receiver ... ok
+test ssh::prompt::tests::test_register_and_respond ... ok
+test ssh::prompt::tests::test_respond_nonexistent ... ok
+test ssh::manager::tests::repeated_session_ends_return_real_session_table_to_baseline ... ok
+test ssh::session::input_tests::input_close_wakes_budget_and_completion_waiters ... ok
+test ssh::session::input_tests::input_large_write_chunks_and_concurrent_events_do_not_interleave ... ok
+test ssh::session::input_tests::input_budget_waits_until_actual_write_and_preserves_fifo ... ok
+test ssh::session::input_tests::input_write_reports_actual_failure_and_receiver_drop ... ok
+test ssh::session::lifecycle::tests::lifecycle_finishes_only_once ... ok
+test ssh::session::lifecycle::tests::lifecycle_guard_notifies_on_drop ... ok
+test ssh::session::lifecycle::tests::lifecycle_guard_notifies_when_unpolled_task_is_cancelled ... ok
+test ssh::session::lifecycle::tests::lifecycle_remembers_close_before_subscription ... ok
+test ssh::session::input_tests::input_resize_only_keeps_latest_and_empty_write_is_noop ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_error_redacts_connection_identifiers ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_hash_output_requires_one_sha256_per_file ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel ... ignored, 需要 SSHX_BENCHMARK_CONFIG 指向本地 JSON；手动连接测试服务器
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_session ... ignored, 需要 SSHX_BENCHMARK_CONFIG 指向本地 JSON；手动连接测试服务器
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_small_batch ... ignored, 需要 SSHX_BENCHMARK_CONFIG 指向本地 JSON；手动连接测试服务器
+test ssh::session::openssh::openssh_benchmark::benchmark_rejects_invalid_counts_before_network ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_rejects_missing_or_wrong_sized_source_before_network ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_rejects_out_of_scope_remote_directory_before_network ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_small_batch_has_100_sequential_gets_and_rejects_newline_path ... ok
+test ssh::session::openssh::tests::auth_scan_bounds_unicode_without_splitting_a_character ... ok
+test ssh::session::openssh::tests::authenticated_line ... ok
+test ssh::session::openssh::tests::authentication_succeeded_ki ... ok
+test ssh::session::openssh::tests::build_sftp_batch_args_keep_progress_meter_enabled ... ok
+test ssh::session::openssh::tests::build_ssh_args_includes_control_master_when_multiplex ... ok
+test ssh::session::openssh::tests::build_ssh_args_key_password_includes_password_auth ... ok
+test ssh::session::openssh::tests::build_ssh_args_key_remote_true ... ok
+test ssh::session::openssh::tests::build_ssh_args_password_and_keepalive ... ok
+test ssh::session::openssh::tests::chinese_mfa_fullwidth_colon ... ok
+test ssh::session::openssh::tests::close_waits_for_child_and_removes_control_path ... ok
+test ssh::session::openssh::tests::compact_control_socket_path_fits_unix_limit ... ok
+test ssh::session::openssh::tests::default_port_is_explicit_for_every_openssh_command ... ok
+test ssh::session::openssh::tests::exited_ssh_drains_final_log_through_full_queue_and_preserves_authentication ... ok
+test ssh::session::openssh::tests::exited_ssh_reads_final_failure_before_reporting_error ... ok
+test ssh::session::openssh::tests::exited_ssh_waits_for_paused_reader_final_authenticated_log ... ok
+test ssh::session::openssh::tests::failed_authentication_reaps_child_and_cleans_control_path ... ok
+test ssh::session::openssh::tests::failed_kill_does_not_wait_forever_for_a_running_child ... ok
+test ssh::session::openssh::openssh_benchmark::benchmark_detects_changed_local_file_hash ... ok
+test ssh::session::openssh::tests::incremental_auth_log_preserves_split_utf8_and_reads_only_new_bytes ... ok
+test ssh::session::openssh::tests::incremental_auth_log_large_input_keeps_scan_bounded ... ok
+test ssh::session::openssh::tests::jump_server_please_enter_n_digits_no_colon ... ok
+test ssh::session::openssh::tests::manager_ack_still_releases_only_the_active_sessions_output_window ... ok
+test ssh::session::openssh::tests::mfa_detection ... ok
+test ssh::session::openssh::tests::mfa_ignores_debug1_line ... ok
+test ssh::session::openssh::tests::no_more_auth_methods_is_fatal ... ok
+test ssh::session::openssh::tests::parse_sftp_progress_percent_reads_percent_token ... ok
+test ssh::session::openssh::tests::password_not_mfa ... ok
+test ssh::session::openssh::tests::permission_denied_is_fatal ... ok
+test ssh::session::openssh::tests::pty_reader_applies_backpressure_and_preserves_byte_order ... ok
+test ssh::session::openssh::tests::report_observed_progress_uses_polled_file_size_without_meter_text ... ok
+test ssh::session::openssh::tests::incremental_auth_log_reopens_replaced_file_and_closes_full_queue ... ok
+test ssh::session::openssh::tests::security_all_openssh_commands_require_verified_host_keys ... ok
+test ssh::session::openssh::tests::security_refuses_local_passphrase_requests_from_remote_text ... ok
+test commands::connection::tests::unavailable_export_path_reports_error_and_database_remains_usable ... ok
+test ssh::session::openssh::tests::sftp_batch_final_reader_bounds_continuous_noise_before_join ... ok
+test ssh::session::openssh::tests::sftp_batch_final_reader_exits_when_descendant_holds_pty_and_keeps_tail ... ok
+test ssh::session::openssh::tests::sftp_batch_output_reader_applies_backpressure_and_unblocks_on_drop ... ok
+test ssh::session::openssh::tests::sftp_batch_parses_percent_across_chunks ... ok
+test ssh::session::openssh::tests::sftp_batch_probe_deadline_covers_stdout_held_by_descendant ... ok
+test db::file_transfer::tests::history_query_keeps_limit_isolation_and_timestamp_ties_at_100k_rows ... ok
+test ssh::session::openssh::tests::sftp_batch_probe_deadline_kills_and_reaps_stalled_child ... ok
+test ssh::session::openssh::tests::sftp_batch_probe_quotes_shell_metacharacters_as_file_name ... ok
+test ssh::session::openssh::tests::sftp_batch_probe_waits_for_meter_silence_and_is_throttled ... ok
+test ssh::session::openssh::tests::sftp_batch_quote_handles_spaces_and_quotes ... ok
+test commands::connection::tests::test_decrypt_export_file_rejects_wrong_password ... ok
+test commands::connection::tests::test_build_and_decrypt_encrypted_export_roundtrip ... ok
+test ssh::session::openssh::tests::strip_mfa_line_removes_stale_prompt ... ok
+test crypto::tests::test_decrypt_wrong_password ... ok
+test crypto::tests::test_encrypt_decrypt ... ok
+test ssh::session::openssh::tests::sftp_batch_reader_waits_for_output_then_stops_with_live_pty_writer ... ok
+test ssh::session::openssh_host_key::tests::configuration_changes_in_target_or_trust_files_reject_old_approval ... ok
+test ssh::session::openssh_host_key::tests::effective_snapshot_preserves_paths_and_original_known_hosts_command ... ok
+test ssh::session::openssh_host_key::tests::existing_other_algorithm_ca_or_revoked_record_is_not_first_use ... ok
+test ssh::session::openssh_host_key::tests::incomplete_or_untrusted_text_cannot_request_confirmation ... ok
+test ssh::session::openssh_host_key::tests::isolated_rsa_only_sshd_with_production_arguments_and_unrelated_known_hosts ... ignored, 需要允许本地回环监听；模拟生产 RSA-only、完整连接参数与非空 known_hosts
+test ssh::session::openssh_host_key::tests::isolated_sshd_verifies_persistence_and_rejects_replacement_revocation_and_other_algorithms ... ignored, 需要允许本地回环监听；只使用自动生成的临时配置和密钥
+test ssh::session::openssh_host_key::tests::native_unknown_failure_exposes_exact_key ... ok
+test ssh::session::openssh_host_key::tests::pin_disables_host_authentication_shortcuts_in_effective_configuration ... ok
+test ssh::session::openssh::tests::sftp_batch_retains_only_bounded_error_tail ... ok
+test ssh::session::openssh_host_key::tests::probe_keeps_target_and_transport_but_removes_credentials_and_remote_command ... ok
+test ssh::session::output_flow_tests::closing_output_wakes_waiter_and_rejects_more_output ... ok
+test ssh::session::output_flow_tests::empty_output_close_waits_for_frontend_ready ... ok
+test ssh::session::output_flow_tests::output_stays_paused_until_frontend_is_ready ... ok
+test ssh::session::output_flow_tests::output_waits_when_in_flight_window_is_full_until_acknowledged ... ok
+test ssh::session::output_flow_tests::output_without_flow_control_does_not_wait_for_ready_or_ack ... ok
+test ssh::session::russh_session_tests::russh_session_continuous_input_does_not_starve_remote_events ... ok
+test ssh::session::russh_session_tests::russh_session_eof_is_delivered_and_blocked_write_does_not_block_remote ... ok
+test ssh::session::russh_session_tests::russh_session_full_output_window_allows_input_and_local_close ... ok
+test ssh::session::openssh::tests::run_sftp_with_batch_progress_polls_probe_when_meter_is_silent ... ok
+test ssh::session::russh_session_tests::russh_session_remote_eof_waits_behind_pending_output_until_ack ... ok
+test ssh::session::russh_session_tests::russh_session_resize_and_write_completion_are_delivered ... ok
+test ssh::session::openssh_host_key::tests::askpass_allows_missing_host_files_with_crlf_but_rejects_permission_errors ... ok
+test ssh::session::russh_session_tests::russh_session_idle_has_no_timer_wakeups ... ok
+test ssh::session::openssh_host_key::tests::askpass_cannot_transfer_approval_to_another_target_or_parent_process ... ok
+test ssh::session::openssh_host_key::tests::askpass_returns_only_one_exact_fingerprint_and_denies_existing_keys ... ok
+test ssh::session::openssh::tests::sftp_batch_probe_drains_large_stdout_without_retaining_it ... ok
+test ssh::session::openssh_host_key::tests::pin_rejects_other_target_or_fingerprint_and_preserves_command_argv ... ok
+test ssh::session::openssh::tests::sftp_batch_cancel_during_two_second_probe_returns_cancelled ... ok
+
+test result: ok. 206 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 2.62s
+
+     Running unittests src/main.rs (src-tauri/target/debug/deps/sshx-9fcc9ce7f49d26d4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/russh_vendor_patch.rs (src-tauri/target/debug/deps/russh_vendor_patch-9d1aa8b645edca5b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests sshx_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+{"startedAt":"2026-09-28T03:46:42.728Z","finishedAt":"2026-09-28T03:46:58.298Z","cmd":"cargo","args":["test","--manifest-path","src-tauri/Cargo.toml","--locked"],"elapsedSeconds":15.567265417,"exitCode":0,"signal":null}

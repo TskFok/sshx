@@ -6,3 +6,4 @@ pub mod settings;
 pub mod sftp;
 pub mod ssh;
 mod transfer_progress;
+pub mod transfer_targets;

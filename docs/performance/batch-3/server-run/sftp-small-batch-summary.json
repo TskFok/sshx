@@ -1,0 +1,23 @@
+{
+  "file": "sshx-batch3-sftp-small-batch-macos-2cbb5f89-81ec-4871-a8d1-7daa0572b2ff.jsonl",
+  "stats": {
+    "A": {
+      "samples": 5,
+      "minMs": 28323.178542,
+      "medianMs": 28937.480499999998,
+      "maxMs": 31618.474458,
+      "allChecksumVerified": true,
+      "p95": null
+    },
+    "B": {
+      "samples": 5,
+      "minMs": 10016.551125,
+      "medianMs": 10525.235125,
+      "maxMs": 10854.701916,
+      "allChecksumVerified": true,
+      "p95": null
+    }
+  },
+  "exploratoryMedianReductionPercent": 63.627672682146596,
+  "scope": "sequential batch diagnostic only, no per-job progress/cancel semantics, not a production adoption result"
+}

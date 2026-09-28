@@ -1,0 +1,19 @@
+started_at_utc=2026-09-28T02:51:45.149Z
+command=pnpm test
+purpose=功能/构建验证；耗时不是应用性能样本
+
+
+> sshx@1.0.0 test /Users/ushopal/workspace/myself/sshx
+> vitest run
+
+
+ RUN  v4.1.9 /Users/ushopal/workspace/myself/sshx
+
+
+ Test Files  38 passed (38)
+      Tests  270 passed (270)
+   Start at  10:51:45
+   Duration  3.44s (transform 2.23s, setup 0ms, import 5.41s, tests 5.21s, environment 1.01s)
+
+
+{"command":["pnpm","test"],"startedAt":"2026-09-28T02:51:45.149Z","finishedAt":"2026-09-28T02:51:49.210Z","elapsedSeconds":4.059,"exitCode":0,"signal":null}

@@ -1,0 +1,31 @@
+{
+  "recordedAt": "2026-09-28T05:14:28.339Z",
+  "finalBuildIdentity": {
+    "verifiedSources": 12,
+    "verifiedArtifacts": 25,
+    "mismatches": []
+  },
+  "jsonValidation": {
+    "json": 46,
+    "jsonl": 15,
+    "rows": 1585
+  },
+  "markdownLinksVerified": 67,
+  "sensitiveIdentifierMatches": [],
+  "diffWhitespaceCheck": true,
+  "documents": [
+    {
+      "path": "docs/performance/batch-3-results.md",
+      "sha256": "8ee72b94a13fb8018d74a3e161f96038c21f233caf8053b63ffec48a090904ec"
+    },
+    {
+      "path": "docs/performance/batch-3-server-results.md",
+      "sha256": "3f00aa6890779474ba8d265cb15406ddfc8c9d8ec84dbf49dff17b611a0315cd"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-24-performance-batch-3-throughput-experiments.md",
+      "sha256": "21a8d36be7c0d2ebae556414d9e0bdd06d690b71a78f081d3b2dd766a9fba408"
+    }
+  ],
+  "notes": "本轮已修改Rust文件格式通过；全仓cargo fmt有既有未改文件差异。UI锁屏与未测矩阵见主文档。"
+}

@@ -8,6 +8,7 @@ mod ssh;
 use commands::{
     connection, diagnostic as diagnostic_commands, file_transfer as file_transfer_commands,
     host_key as host_key_commands, settings, sftp as sftp_commands, ssh as ssh_commands,
+    transfer_targets,
 };
 use db::Database;
 use file_transfer_commands::TransferCancellationManager;
@@ -70,6 +71,7 @@ pub fn run() {
             file_transfer_commands::file_transfer_download,
             file_transfer_commands::file_transfer_cancel,
             file_transfer_commands::file_transfer_list_history,
+            transfer_targets::file_transfer_resolve_local_targets,
             settings::get_settings,
             settings::update_settings,
         ])

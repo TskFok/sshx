@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-09-28T05:12:33.836Z",
+  "server": "test-server-1",
+  "scope": "only this run mktemp directory and dedicated ControlMaster",
+  "remoteRoot": "/tmp/sshx-batch3.0A5J9SJX",
+  "remoteDirectoryRemoved": true,
+  "masterExitCode": 0,
+  "controlPathExistsAfter": false,
+  "restartedForCleanup": true,
+  "strictHostKeyChecking": true,
+  "updateHostKeys": false,
+  "notes": "UI validation deferred because desktop locked; no user directory, existing SSH session or installed app touched; local fixture and raw evidence retained"
+}

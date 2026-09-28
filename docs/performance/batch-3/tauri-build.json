@@ -1,0 +1,18 @@
+{
+  "command": [
+    "pnpm",
+    "tauri",
+    "build",
+    "--bundles",
+    "app",
+    "--no-sign",
+    "--ci",
+    "--",
+    "--locked"
+  ],
+  "startedAt": "2026-09-28T02:52:38.167Z",
+  "finishedAt": "2026-09-28T02:53:20.531Z",
+  "elapsedSeconds": 42.361,
+  "exitCode": 0,
+  "signal": null
+}

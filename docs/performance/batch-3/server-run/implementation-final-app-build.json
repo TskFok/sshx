@@ -1,0 +1,21 @@
+{
+  "startedAt": "2026-09-28T04:44:17.756Z",
+  "finishedAt": "2026-09-28T05:02:01.211Z",
+  "cmd": "env",
+  "args": [
+    "-u",
+    "VITE_SSHX_TRANSFER_LIMIT",
+    "pnpm",
+    "tauri",
+    "build",
+    "--bundles",
+    "app",
+    "--no-sign",
+    "--ci",
+    "--",
+    "--locked"
+  ],
+  "elapsedSeconds": 1063.423398584,
+  "exitCode": 0,
+  "signal": null
+}

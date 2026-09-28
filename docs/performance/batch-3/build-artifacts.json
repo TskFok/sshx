@@ -1,0 +1,132 @@
+{
+  "recordedAt": "2026-09-28T02:56:53.014Z",
+  "commit": "0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e",
+  "note": "当前生产构建标识，未启动；无运行性能采样，macOS app 未签名；stat为字节而非传输大小",
+  "files": [
+    {
+      "path": "dist/index.html",
+      "bytes": 665,
+      "sha256": "26e9a767bf2d3c1ed97e0b4fa766768637568f2d21fc0e645f2cda3220f40743"
+    },
+    {
+      "path": "dist/assets/Connections-DArcpf_B.js",
+      "bytes": 27683,
+      "sha256": "f8097417e60e09ee80fe49c144614d705c812e83792016a93aeb11df412dfc02"
+    },
+    {
+      "path": "dist/assets/Dashboard-auaFdOj7.js",
+      "bytes": 4646,
+      "sha256": "f73f3a7b11b3315f40af320c1984ef26713a7fcd1b1e45fbb69275d3460bd06e"
+    },
+    {
+      "path": "dist/assets/Diagnostics-KXbirzb4.js",
+      "bytes": 4616,
+      "sha256": "d646ea996835078492cb8edaa2641038fefb5210088e466bee41026e1918a110"
+    },
+    {
+      "path": "dist/assets/FileTransferWorkspace-CUftubFr.js",
+      "bytes": 35167,
+      "sha256": "19aa76e29b0ad76a4ebf651aa938f06221c03dc60b268fdd9b6a0d125ba71b44"
+    },
+    {
+      "path": "dist/assets/Settings-B6wgELHj.js",
+      "bytes": 11713,
+      "sha256": "b6514bae394f990d395019ec9b2773cf3c32b8a0fda2cc8d6638c6f1f8c7142a"
+    },
+    {
+      "path": "dist/assets/TerminalPage-9RQJ1adl.css",
+      "bytes": 3125,
+      "sha256": "c286e6da42634569e4eea916af0846235db92ba61c5c26738bf75151c79621c5"
+    },
+    {
+      "path": "dist/assets/TerminalPage-Bz-GidQz.js",
+      "bytes": 310889,
+      "sha256": "425e18264528daee812b7f416614e770d177a4334623d1fe8a0a71e2b40e53b3"
+    },
+    {
+      "path": "dist/assets/button-zLnuGEfV.js",
+      "bytes": 32367,
+      "sha256": "8f79459d49f349e6877352235d307f8330eb1cbebda719a141b15cd9738d1b84"
+    },
+    {
+      "path": "dist/assets/card-HRy1t4xs.js",
+      "bytes": 1033,
+      "sha256": "ef131bc86829d4a79798639cd1639ba4229edf62c9ea5b77592664332d32c777"
+    },
+    {
+      "path": "dist/assets/connectionGroups-C0I6haag.js",
+      "bytes": 1933,
+      "sha256": "364395682cd3fcd50590c955a0e2fb718050b3eedbdb7e7b751231dadc322d5e"
+    },
+    {
+      "path": "dist/assets/connectionNavigation-D0hgYWd9.js",
+      "bytes": 1235,
+      "sha256": "b46ea4fb29dde125c4cf7fb7de87fc1b1af5cab0ebc77f3da4a2f7626250b427"
+    },
+    {
+      "path": "dist/assets/core-mzEiFk5C.js",
+      "bytes": 136699,
+      "sha256": "3e997b0616e3bfdc3ef48488174bcde722edb73cda91559ff14787a525d0f7f7"
+    },
+    {
+      "path": "dist/assets/index-2bi9Ju9D.css",
+      "bytes": 37288,
+      "sha256": "9d7e5da3894e422112cb76d601c12cb03f88aa524544b339ec1caef46b8ed4cc"
+    },
+    {
+      "path": "dist/assets/index-Dj6OVDEY.js",
+      "bytes": 164576,
+      "sha256": "d9607ea052b3635b51df29c1db725c9d61eb1595ca721f9278064b9277a5824c"
+    },
+    {
+      "path": "dist/assets/label--5dnUEyJ.js",
+      "bytes": 2057,
+      "sha256": "d80456721786bf37d1c61b4535c4a94855dc2f8559d8ee408b0540b5ca05af67"
+    },
+    {
+      "path": "dist/assets/plus-Cfb98PHx.js",
+      "bytes": 143,
+      "sha256": "9733fca7d838e34d31a808207b1fe6644bffcbcfe1ebee18ae00387b77a903a0"
+    },
+    {
+      "path": "dist/assets/refresh-cw-CRm2b3vL.js",
+      "bytes": 310,
+      "sha256": "7537e38fa16aea55dc362b20faabd7e1bcf174a521a839ce170ebb914697a27d"
+    },
+    {
+      "path": "dist/assets/select-CpuY1uPy.js",
+      "bytes": 20743,
+      "sha256": "07aab712db8ce03adf6894fe32b70507fec7ec0c0fd95d40b6f068cccb142579"
+    },
+    {
+      "path": "dist/assets/settingsEvents-BlwEMYmb.js",
+      "bytes": 10409,
+      "sha256": "950c3fa5e45be3b051ef4f4d155d26bf3353a24e6ba800edf330b66a82dd373e"
+    },
+    {
+      "path": "dist/assets/star-jaEFBfHl.js",
+      "bytes": 462,
+      "sha256": "6fb6c73291adae66082ce2279d8b652a910362b9cca79f50c8eaf99025083b7b"
+    },
+    {
+      "path": "dist/assets/terminalTabBarClick-CG7fEK6a.js",
+      "bytes": 1406,
+      "sha256": "92fe25e77d59f90a571d8f8261a89feff81dd7d6acaaa9df17791d592516cad4"
+    },
+    {
+      "path": "dist/assets/trash-2-BrjC_-Dx.js",
+      "bytes": 347,
+      "sha256": "423403bce04f0e98431b0e8184710d8058d13353d660faf7998a34408be43ee1"
+    },
+    {
+      "path": "src-tauri/target/release/bundle/macos/SSHX.app/Contents/MacOS/sshx",
+      "bytes": 15842016,
+      "sha256": "5ca8773a18a045086cc20df718b3b5e38f0e951da5608666d086c91d4b234d3f"
+    },
+    {
+      "path": "src-tauri/target/release/bundle/macos/SSHX.app/Contents/Info.plist",
+      "bytes": 949,
+      "sha256": "8d1bc16f05fdb4db8a22d56b1fe5f04839843e929aacc1aa60b4a549ac59794f"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-09-28T03:16:58.624Z",
+  "samples": 130,
+  "appPid": 23074,
+  "scope": "Rust app and descendants; excludes unattributed WebKit/GPU XPC processes",
+  "peakRustAndSshRssKiB": 54384,
+  "peakRustRssKiB": 51920,
+  "peakObservedRustCpuPercent": 14.5,
+  "note": "1秒ps取样，CPU为ps瞬时/平滑值；不含WebKit/GPU；开始采样晚于输出开始，非全程峰值，无候选对照"
+}

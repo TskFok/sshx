@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-09-28T03:05:17.104Z",
+  "serverAlias": "test-server-1",
+  "strictHostKeyChecking": true,
+  "updateHostKeys": false,
+  "authentication": "user-provided-key-path",
+  "remoteDir": "/tmp/sshx-batch3.0A5J9SJX/data",
+  "command": "uname -sm; getconf _NPROCESSORS_ONLN; getconf PAGESIZE; df -Pk /tmp; cat /proc/loadavg; ssh -V",
+  "stdout": "Linux x86_64\n4\n4096\nFilesystem     1024-blocks    Used Available Capacity Mounted on\n/dev/vda2         61806672 7001844  52167296      12% /\n0.00 0.00 0.00 2/260 219624\nOpenSSH_8.9p1 Ubuntu-3ubuntu0.10, OpenSSL 3.0.2 15 Mar 2022\n",
+  "note": "无凭据内容；仅隔离临时目录；后续RTT是含本地进程/远程通道创建的noop耗时，不是ICMP RTT"
+}

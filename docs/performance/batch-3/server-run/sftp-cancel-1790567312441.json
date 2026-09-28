@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-09-28T03:48:32.442Z",
+  "finishedAt": "2026-09-28T03:50:06.986Z",
+  "elapsedSeconds": 94.539610833,
+  "exitCode": 0,
+  "signal": null,
+  "mode": "cancel",
+  "samples": 30,
+  "timeout": false,
+  "psError": false,
+  "rootObserved": true,
+  "observedPeakSftpProcesses": 1,
+  "observedPeakRssKiB": 20352,
+  "remainingObservedOwnedProcesses": [],
+  "cleanupSignals": [],
+  "notes": "500ms descendant sampling: peak is only observed lower bound; no observed remnants at finish is not proof of no leaks; excludes independently created ControlMaster and unobserved short-lived children; process identity checked with start time and executable; CPU timing includes hashing"
+}

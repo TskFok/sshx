@@ -1,0 +1,11 @@
+{
+  "recordedAt": "2026-09-28T05:13:06.648Z",
+  "scope": "latest FileTransferPage product implementation, default limit=1",
+  "status": "not_executed",
+  "reason": "Mac locked; CUA could not automatically unlock. User was asked to unlock; no response received before cleanup.",
+  "buildManifest": "implementation-final-build-artifacts.json",
+  "launchAttempt": "cua.getApp(repository release bundle)",
+  "observedBuiltAppProcess": false,
+  "processObservation": "ps -axo pid=,comm= filtered exact repository bundle path: no match",
+  "notes": "Earlier TerminalPage smoke used an earlier build and does not verify the new transfer queue. React interaction tests passed; they do not replace actual desktop smoke."
+}

@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-09-28T03:47:04.667Z",
+  "finishedAt": "2026-09-28T03:47:18.733Z",
+  "cmd": "cargo",
+  "args": [
+    "test",
+    "--release",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--locked",
+    "benchmark_production_sftp_",
+    "--no-run"
+  ],
+  "elapsedSeconds": 14.063460374999998,
+  "exitCode": 0,
+  "signal": null
+}

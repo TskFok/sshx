@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-09-28T03:13:49.970Z",
+  "commit": "0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e",
+  "profile": "release",
+  "compileCommand": "cargo test --release --manifest-path src-tauri/Cargo.toml --locked benchmark_production_sftp_session --no-run",
+  "scope": "production SshSession SFTP methods; cfg(test) harness, excludes UI/IPC/DB",
+  "files": [
+    {
+      "path": "src-tauri/src/ssh/session/openssh.rs",
+      "sha256": "acd6fa30c6276b26b14b1c56000a7e77d91c2bbb89fcf26491f040716647a3cc"
+    },
+    {
+      "path": "src-tauri/src/ssh/session/openssh_benchmark.rs",
+      "sha256": "513e212589c473062352f5bcf530db8e96c7244278cca103bac60171579876e1"
+    },
+    {
+      "path": "src-tauri/Cargo.lock",
+      "sha256": "3567e48cf3dcdef414bf36e60bf60be19330cef1a96511632f482107f5ffdc37"
+    },
+    {
+      "path": "src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf",
+      "sha256": "b77dad552bda66c16958705e99be791dea9e591d39b430584dcf8b9d127e6772"
+    }
+  ]
+}

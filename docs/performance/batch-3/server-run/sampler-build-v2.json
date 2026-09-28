@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-09-28T03:25:04.614Z",
+  "commit": "0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e",
+  "profile": "release",
+  "compileCommand": "cargo test --release --manifest-path src-tauri/Cargo.toml --locked benchmark_production_sftp_session --no-run",
+  "scope": "production SshSession SFTP methods; cfg(test) harness, excludes UI/IPC/DB",
+  "note": "v2 adds per-sample SHA-256 after the transfer timer; file hashes captured before later MSRV-only truncation fix",
+  "files": [
+    {
+      "path": "src-tauri/src/ssh/session/openssh.rs",
+      "sha256": "acd6fa30c6276b26b14b1c56000a7e77d91c2bbb89fcf26491f040716647a3cc"
+    },
+    {
+      "path": "src-tauri/src/ssh/session/openssh_benchmark.rs",
+      "sha256": "4c9d332d36948d139327956350b757be8dc3a40d26e50a63a25a58191e7ef2f4"
+    },
+    {
+      "path": "src-tauri/Cargo.lock",
+      "sha256": "3567e48cf3dcdef414bf36e60bf60be19330cef1a96511632f482107f5ffdc37"
+    },
+    {
+      "path": "src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf",
+      "sha256": "0880bfb78ad7a7eb9fb31265ce22588b346d8f77f153a58ece619d4ee2e8270c"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-09-28T03:09:38.103Z",
+  "serverAlias": "test-server-1",
+  "scenario": "ssh-raw-finite-output",
+  "command": "dd if=/dev/zero bs=1024 count=65536 2>/dev/null | tr '\\000' A",
+  "bytes": 67108864,
+  "elapsedMs": 113103.737291,
+  "firstByteMs": 153.164166,
+  "sha256": "dbfaca2662cb70b69dfefd5ac95d1f54a73663092d46cefdc9609dc695a12c98",
+  "correctness": true,
+  "exit": 0,
+  "stderr": "",
+  "note": "命令行stdout端点，非Tauri/PTY/xterm性能；同一已认证ControlMaster"
+}

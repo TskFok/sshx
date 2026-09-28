@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-09-28T03:18:54.741Z",
+  "server": "test-server-1",
+  "scenario": "TerminalPage visible single session finite-output smoke",
+  "requestedOutputBytes": 67108864,
+  "observedTail": "BATCH3-64M-TAIL> followed by shell prompt",
+  "tailObserved": true,
+  "remoteProducerElapsedMs": null,
+  "startMarkerBytes": 0,
+  "endMarkerUnixNs": "1790565174188323059",
+  "note": "起始date标记为空，时间样本无效，未计算吞吐；仅CUA核对有限输出后的尾标记及shell。沿用用户现有窗口/主题；部分release测试编译重叠，不用于采用决策。"
+}

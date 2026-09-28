@@ -1,0 +1,7 @@
+{"startedAt":"2026-09-28T04:03:03.375Z","cmd":"cargo","args":["test","--release","--manifest-path","src-tauri/Cargo.toml","--locked","benchmark_production_sftp_","--no-run"]}
+   Compiling sshx v1.0.0 (/Users/ushopal/workspace/myself/sshx/src-tauri)
+    Finished `release` profile [optimized] target(s) in 44.61s
+  Executable unittests src/lib.rs (src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf)
+  Executable unittests src/main.rs (src-tauri/target/release/deps/sshx-b1153f50c3caf0b3)
+  Executable tests/russh_vendor_patch.rs (src-tauri/target/release/deps/russh_vendor_patch-beed58fe2387b61f)
+{"startedAt":"2026-09-28T04:03:03.375Z","finishedAt":"2026-09-28T04:03:48.124Z","cmd":"cargo","args":["test","--release","--manifest-path","src-tauri/Cargo.toml","--locked","benchmark_production_sftp_","--no-run"],"elapsedSeconds":44.745608792,"exitCode":0,"signal":null}

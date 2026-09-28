@@ -1,0 +1,62 @@
+记录时间 UTC: 2026-09-28T02:51:44.136Z
+平台: darwin/arm64
+CPU: Apple M1; 逻辑核: 8; 总内存: 17179869184 bytes
+注意：环境元数据，不是性能测量。系统WebKit版本不代表实际应用已经取样。
+
+$ git rev-parse HEAD
+0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e
+exit_code=0
+
+$ git status --short
+?? docs/performance/batch-3/
+exit_code=0
+
+$ sw_vers 
+ProductName:		macOS
+ProductVersion:		26.5.2
+BuildVersion:		25F84
+exit_code=0
+
+$ node --version
+v25.5.0
+exit_code=0
+
+$ pnpm --version
+10.28.2
+exit_code=0
+
+$ rustc --version
+rustc 1.93.1 (01f6ddf75 2026-02-11)
+exit_code=0
+
+$ cargo --version
+cargo 1.93.1 (083ac5135 2025-12-15)
+exit_code=0
+
+$ rustup target list --installed
+aarch64-apple-darwin
+x86_64-pc-windows-gnu
+x86_64-unknown-linux-gnu
+exit_code=0
+
+$ pnpm list @tauri-apps/api @xterm/xterm @xterm/addon-webgl vite --depth 0
+Legend: production dependency, optional only, dev only
+
+sshx@1.0.0 /Users/ushopal/workspace/myself/sshx (PRIVATE)
+
+dependencies:
+@tauri-apps/api 2.11.0
+@xterm/addon-webgl 0.18.0
+@xterm/xterm 5.5.0
+
+devDependencies:
+vite 8.0.16
+exit_code=0
+
+$ /usr/libexec/PlistBuddy -c Print :CFBundleShortVersionString /System/Library/Frameworks/WebKit.framework/Resources/Info.plist
+21624
+exit_code=0
+
+$ /usr/libexec/PlistBuddy -c Print :CFBundleVersion /System/Library/Frameworks/WebKit.framework/Resources/Info.plist
+21624.2.5.11.8
+exit_code=0

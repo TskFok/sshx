@@ -1,0 +1,37 @@
+{"startedAt":"2026-09-28T04:39:08.162Z","executable":"/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","args":["-lp","/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","benchmark_production_sftp_download_cancel_isolation","--ignored","--nocapture"],"samples":1,"scope":"production SFTP method diagnostic; no DB/IPC/UI"}
+
+running 1 test
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel_isolation ... FAILED
+
+failures:
+
+failures:
+    ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel_isolation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 224 filtered out; finished in 0.00s
+
+
+thread 'ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel_isolation' (19367217) panicked at src/ssh/session/openssh_benchmark.rs:1037:38:
+called `Result::unwrap()` on an `Err` value: "keyPath 或 controlPath 不存在"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+real 0.02
+user 0.00
+sys 0.00
+            11059200  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                 766  page reclaims
+                 118  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  15  messages sent
+                   0  messages received
+                   0  signals received
+                  11  voluntary context switches
+                 107  involuntary context switches
+            53644132  instructions retired
+            25935481  cycles elapsed
+             2180224  peak memory footprint
+{"startedAt":"2026-09-28T04:39:08.162Z","finishedAt":"2026-09-28T04:39:08.459Z","elapsedSeconds":0.29561612499999995,"exitCode":101,"signal":null,"mode":"isolation","samples":1,"timeout":false,"psError":false,"rootObserved":true,"observedPeakSftpProcesses":0,"observedPeakRssKiB":1280,"remainingObservedOwnedProcesses":[],"cleanupSignals":[],"notes":"500ms descendant sampling: peak is only observed lower bound; no observed remnants at finish is not proof of no leaks; excludes independently created ControlMaster and unobserved short-lived children; process identity checked with start time and executable; CPU timing includes hashing"}

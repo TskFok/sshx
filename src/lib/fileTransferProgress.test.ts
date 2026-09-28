@@ -4,9 +4,11 @@ import type { TransferProgressMap, TransferProgressPayload } from "./fileTransfe
 import {
   applyOwnedTransferProgress,
   createOwnedTransferProgressHandler,
+  createOwnedTransfersProgressHandler,
   createTransferBatchGate,
   createTransferPlaceholderEntry,
   finalizeTransferProgress,
+  finalizeOwnedTransferProgress,
   insertTransferPlaceholder,
   rollbackInsertedTransferEntry,
   retainTransferProgress,
@@ -29,6 +31,41 @@ const event: TransferProgressPayload = {
 
 describe("fileTransferProgress", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("并发任务按ID独立终态过滤，旧任务和重复终态不污染其他任务", () => {
+    let ids = new Set(["current", "second"]);
+    let state: TransferProgressMap = {};
+    const update = vi.fn((apply: (value: TransferProgressMap) => TransferProgressMap) => { state = apply(state); });
+    const handle = createOwnedTransfersProgressHandler(() => ids, update);
+    handle(event);
+    handle({ ...event, transferId: "second", status: "success" });
+    handle({ ...event, transferId: "second" });
+    handle({ ...event, transferId: "foreign" });
+    expect(state.current.status).toBe("running");
+    expect(state.second.status).toBe("success");
+    expect(update).toHaveBeenCalledTimes(2);
+    ids = new Set(["next"]);
+    handle(event);
+    expect(update).toHaveBeenCalledTimes(2);
+  });
+
+  it("单项收尾只移除该项，历史失败时保留其它运行任务", () => {
+    const other = { ...event, transferId: "second" };
+    const completion = { transferId: "current", direction: "upload" as const, totalBytes: 16,
+      status: "failed" as const, message: "传输已中断" };
+    const result = finalizeOwnedTransferProgress({ current: event, second: other }, completion, false);
+    expect(result.second).toBe(other);
+    expect(result.current.status).toBe("failed");
+    expect(finalizeOwnedTransferProgress(result, completion, true)).toEqual({ second: other });
+  });
+
+  it("invoke 已确认失败后迟到成功事件不能覆盖该终态", () => {
+    let state: TransferProgressMap = { current: { ...event, status: "failed", message: "传输已中断" } };
+    const handle = createOwnedTransfersProgressHandler(() => new Set(["current"]), (apply) => { state = apply(state); });
+    handle({ ...event, status: "success", progress: 100 });
+    expect(state.current.status).toBe("failed");
+    expect(state.current.message).toBe("传输已中断");
+  });
 
   it("其他任务事件保持原状态引用", () => {
     const state = {};

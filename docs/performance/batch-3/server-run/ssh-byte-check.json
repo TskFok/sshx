@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-09-28T03:05:18.629Z",
+  "serverAlias": "test-server-1",
+  "command": "printf '\\344\\270\\255\\346\\226\\207\\033[31mRED\\033[0m\\nTAIL> '",
+  "bytes": 25,
+  "sha256": "350f1e989cc8a4053875d3ec71b89315b6b5c99615aefcfe6043ba3b7328a2d0",
+  "correctness": true,
+  "note": "命令行无PTY字节链路，不代表应用xterm或ACK"
+}

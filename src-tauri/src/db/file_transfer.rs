@@ -55,18 +55,18 @@ pub fn mark_success(
     ended_at: i64,
     duration_ms: i64,
     average_speed_bps: u64,
-) -> Result<(), rusqlite::Error> {
-    conn.execute(
+) -> Result<bool, rusqlite::Error> {
+    let changed = conn.execute(
         "UPDATE file_transfer_history
          SET status = 'success',
              error_message = NULL,
              ended_at = ?1,
              duration_ms = ?2,
              average_speed_bps = ?3
-         WHERE id = ?4",
+         WHERE id = ?4 AND status = 'running'",
         params![ended_at, duration_ms, average_speed_bps as i64, id],
     )?;
-    Ok(())
+    Ok(changed == 1)
 }
 
 pub fn mark_failed(
@@ -76,15 +76,15 @@ pub fn mark_failed(
     duration_ms: i64,
     average_speed_bps: u64,
     error_message: &str,
-) -> Result<(), rusqlite::Error> {
-    conn.execute(
+) -> Result<bool, rusqlite::Error> {
+    let changed = conn.execute(
         "UPDATE file_transfer_history
          SET status = 'failed',
              error_message = ?1,
              ended_at = ?2,
              duration_ms = ?3,
              average_speed_bps = ?4
-         WHERE id = ?5",
+         WHERE id = ?5 AND status = 'running'",
         params![
             error_message,
             ended_at,
@@ -93,7 +93,7 @@ pub fn mark_failed(
             id
         ],
     )?;
-    Ok(())
+    Ok(changed == 1)
 }
 
 pub fn list_for_connection(
@@ -328,5 +328,75 @@ mod tests {
         assert_eq!(history[0].id, "t1");
         assert!(matches!(history[0].status, FileTransferStatus::Success));
         assert_eq!(history[0].average_speed_bps, Some(1280));
+    }
+
+    #[test]
+    fn concurrent_ids_reach_one_terminal_state_each() {
+        use std::sync::{Arc, Barrier, Mutex};
+
+        let db = Arc::new(Mutex::new(create_test_db()));
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO connections (
+                    id, name, host, port, username, auth_type, created_at, updated_at
+                ) VALUES ('c1', 'Conn', 'example.com', 22, 'user', 'password', 1, 1)",
+                [],
+            )
+            .unwrap();
+            let item = |id: &str, started_at| NewTransferHistory {
+                id: id.to_string(),
+                connection_id: "c1".into(),
+                direction: FileTransferDirection::Download,
+                local_path: "/tmp/file.bin".into(),
+                local_dir: "/tmp".into(),
+                remote_path: "/remote/file.bin".into(),
+                remote_dir: "/remote".into(),
+                file_name: "file.bin".into(),
+                total_bytes: 128,
+                started_at,
+            };
+            insert_running(&conn, &item("completed", 10)).unwrap();
+            insert_running(&conn, &item("cancelled", 11)).unwrap();
+        }
+
+        let barrier = Arc::new(Barrier::new(3));
+        std::thread::scope(|scope| {
+            let success_db = Arc::clone(&db);
+            let success_barrier = Arc::clone(&barrier);
+            let success = scope.spawn(move || {
+                success_barrier.wait();
+                let conn = success_db.lock().unwrap();
+                mark_success(&conn, "completed", 20, 10, 12_800).unwrap()
+            });
+            let failure_db = Arc::clone(&db);
+            let failure_barrier = Arc::clone(&barrier);
+            let failure = scope.spawn(move || {
+                failure_barrier.wait();
+                let conn = failure_db.lock().unwrap();
+                mark_failed(&conn, "cancelled", 21, 10, 0, "传输已中断").unwrap()
+            });
+            barrier.wait();
+            assert!(success.join().unwrap());
+            assert!(failure.join().unwrap());
+        });
+
+        let conn = db.lock().unwrap();
+        assert!(!mark_failed(&conn, "completed", 30, 20, 0, "后到错误").unwrap());
+        assert!(!mark_success(&conn, "cancelled", 31, 20, 1).unwrap());
+        assert!(!mark_success(&conn, "completed", 32, 20, 1).unwrap());
+        assert!(!mark_failed(&conn, "cancelled", 33, 20, 0, "重复取消").unwrap());
+
+        // 只查询一次数据库，随后在内存里按 ID 核对终态。
+        let history = list_for_connection(&conn, "c1", 10).unwrap();
+        assert_eq!(history.len(), 2);
+        let completed = history.iter().find(|row| row.id == "completed").unwrap();
+        assert!(matches!(completed.status, FileTransferStatus::Success));
+        assert_eq!(completed.error_message, None);
+        assert_eq!(completed.ended_at, Some(20));
+        let cancelled = history.iter().find(|row| row.id == "cancelled").unwrap();
+        assert!(matches!(cancelled.status, FileTransferStatus::Failed));
+        assert_eq!(cancelled.error_message.as_deref(), Some("传输已中断"));
+        assert_eq!(cancelled.ended_at, Some(21));
     }
 }

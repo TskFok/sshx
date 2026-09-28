@@ -3084,3 +3084,7 @@ mod tests {
         assert!(scan.contains("header") && scan.contains("trailer"));
     }
 }
+
+#[cfg(test)]
+#[path = "openssh_benchmark.rs"]
+mod openssh_benchmark;

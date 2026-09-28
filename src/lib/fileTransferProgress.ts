@@ -119,6 +119,34 @@ export function createOwnedTransferProgressHandler(
   };
 }
 
+export function createOwnedTransfersProgressHandler(
+  getOwnedIds: () => ReadonlySet<string>,
+  update: (apply: (current: TransferProgressMap) => TransferProgressMap) => void,
+): (next: TransferProgressPayload) => void {
+  const terminalIds = new Set<string>();
+  return (next) => {
+    const ids = getOwnedIds();
+    for (const id of terminalIds) if (!ids.has(id)) terminalIds.delete(id);
+    if (!ids.has(next.transferId) || terminalIds.has(next.transferId)) return;
+    if (next.status !== "running") terminalIds.add(next.transferId);
+    update((current) => {
+      const previous = current[next.transferId];
+      if (previous && previous.status !== "running") return current;
+      return applyOwnedTransferProgress(current, next.transferId, next);
+    });
+  };
+}
+
+export function finalizeOwnedTransferProgress(
+  current: TransferProgressMap,
+  completed: Pick<TransferProgressPayload, "transferId" | "direction" | "totalBytes" | "status" | "message">,
+  historyLoaded: boolean,
+): TransferProgressMap {
+  const { [completed.transferId]: previous, ...others } = current;
+  if (historyLoaded) return others;
+  return { ...others, ...finalizeTransferProgress(previous ? { [completed.transferId]: previous } : {}, completed, false) };
+}
+
 export function finalizeTransferProgress(
   current: TransferProgressMap,
   completed: Pick<TransferProgressPayload, "transferId" | "direction" | "totalBytes" | "status" | "message">,

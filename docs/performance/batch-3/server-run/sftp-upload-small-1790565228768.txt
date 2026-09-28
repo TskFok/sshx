@@ -1,0 +1,30 @@
+{"startedAt":"2026-09-28T03:13:48.769Z","executable":"/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","args":["-lp","/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","benchmark_production_sftp_session","--ignored","--nocapture"],"scope":"production-sftp-session-middle-layer","build":"release","direction":"upload","kind":"small","files":100,"samples":5}
+
+running 1 test
+采样文件：sshx-batch3-sftp-macos-0be218e9-2327-4650-8fdb-893ed88168dc.jsonl
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_session has been running for over 60 seconds
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 164.95s
+
+real 165.60
+user 4.81
+sys 5.76
+            12222464  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              646436  page reclaims
+                2074  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+               10512  messages sent
+               17400  messages received
+                   0  signals received
+               12968  voluntary context switches
+               63676  involuntary context switches
+          3752658090  instructions retired
+          5046588194  cycles elapsed
+             3343616  peak memory footprint
+{"startedAt":"2026-09-28T03:13:48.769Z","finishedAt":"2026-09-28T03:16:34.383Z","elapsedSeconds":165.607189083,"exitCode":0,"signal":null,"direction":"upload","kind":"small","files":100,"samples":5}

@@ -1,0 +1,30 @@
+{"startedAt":"2026-09-28T03:48:32.442Z","executable":"/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","args":["-lp","/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","benchmark_production_sftp_download_cancel","--ignored","--nocapture"],"samples":30,"scope":"production SFTP method diagnostic; no DB/IPC/UI"}
+
+running 1 test
+取消采样文件：sshx-batch3-sftp-cancel-macos-7972c8a2-496e-4f1a-811a-25fbe6d63433.jsonl
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel has been running for over 60 seconds
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 93.53s
+
+real 94.28
+user 0.31
+sys 0.54
+            11829248  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               30654  page reclaims
+                 146  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 710  messages sent
+                5410  messages received
+                  60  signals received
+                4947  voluntary context switches
+               11887  involuntary context switches
+           466022208  instructions retired
+           607648104  cycles elapsed
+             3114240  peak memory footprint
+{"startedAt":"2026-09-28T03:48:32.442Z","finishedAt":"2026-09-28T03:50:06.986Z","elapsedSeconds":94.539610833,"exitCode":0,"signal":null,"mode":"cancel","samples":30,"timeout":false,"psError":false,"rootObserved":true,"observedPeakSftpProcesses":1,"observedPeakRssKiB":20352,"remainingObservedOwnedProcesses":[],"cleanupSignals":[],"notes":"500ms descendant sampling: peak is only observed lower bound; no observed remnants at finish is not proof of no leaks; excludes independently created ControlMaster and unobserved short-lived children; process identity checked with start time and executable; CPU timing includes hashing"}

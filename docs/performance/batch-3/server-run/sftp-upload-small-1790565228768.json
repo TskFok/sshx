@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-09-28T03:13:48.769Z",
+  "finishedAt": "2026-09-28T03:16:34.383Z",
+  "elapsedSeconds": 165.607189083,
+  "exitCode": 0,
+  "signal": null,
+  "direction": "upload",
+  "kind": "small",
+  "files": 100,
+  "samples": 5
+}

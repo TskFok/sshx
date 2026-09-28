@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-09-28T03:26:30.387Z",
+  "server": "test-server-1",
+  "build": "baseline macOS release app",
+  "scenario": "actual TerminalPage single session hidden then visible; EOF",
+  "requestedHiddenOutputBytes": 1048576,
+  "hiddenAction": "run remote script, switch to dashboard during 2-second delay, return to terminal",
+  "hiddenTailObserved": true,
+  "chineseAnsiObserved": true,
+  "eofCommand": "printf 'BATCH3-EOF-TAIL\\n'; exit",
+  "eofTailBeforeCloseObserved": true,
+  "appReportedDisconnected": true,
+  "testAppQuit": true,
+  "scope": "CUA visual smoke only, no byte-by-byte capture or latency samples",
+  "noise": "alongside SFTP benchmark; no timing claim; existing user appearance and window"
+}

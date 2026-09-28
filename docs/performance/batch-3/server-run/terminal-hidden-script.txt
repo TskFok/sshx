@@ -1,0 +1,5 @@
+#!/bin/sh
+printf 'BATCH3-HIDDEN-START\n'
+sleep 2
+dd if=/dev/zero bs=1024 count=1024 2>/dev/null | tr '\000' A
+printf '\n\344\270\255\346\226\207\033[31mRED\033[0m\nBATCH3-HIDDEN-TAIL> \n'

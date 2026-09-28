@@ -1,0 +1,74 @@
+{
+  "uploadSmall": {
+    "file": "sshx-batch3-sftp-macos-0be218e9-2327-4650-8fdb-893ed88168dc.jsonl",
+    "samples": 5,
+    "sortedElapsedMs": [
+      31131.935583000002,
+      32169.76425,
+      32232.143458000002,
+      32663.247959000004,
+      36700.889167
+    ],
+    "minMs": 31131.935583000002,
+    "medianMs": 32232.143458000002,
+    "maxMs": 36700.889167,
+    "medianMiBps": 0.09695290677990503,
+    "allChecksumVerified": false,
+    "p95": null,
+    "scope": "production SFTP middle-layer, exploratory only"
+  },
+  "downloadSmall": {
+    "file": "sshx-batch3-sftp-macos-c0a7685a-389c-4ada-81ff-f95f39cb2965.jsonl",
+    "samples": 5,
+    "sortedElapsedMs": [
+      29513.702209000003,
+      30192.919374999998,
+      30199.35525,
+      30272.677209,
+      30382.413542
+    ],
+    "minMs": 29513.702209000003,
+    "medianMs": 30199.35525,
+    "maxMs": 30382.413542,
+    "medianMiBps": 0.10347903040082287,
+    "allChecksumVerified": true,
+    "p95": null,
+    "scope": "production SFTP middle-layer, exploratory only"
+  },
+  "uploadLarge": {
+    "file": "sshx-batch3-sftp-macos-0c94ce91-0a3c-43e7-96c5-45d0f9d8b777.jsonl",
+    "samples": 5,
+    "sortedElapsedMs": [
+      114402.25441600001,
+      123948.57575,
+      126355.46424999999,
+      128492.51504099999,
+      129758.97191600001
+    ],
+    "minMs": 114402.25441600001,
+    "medianMs": 126355.46424999999,
+    "maxMs": 129758.97191600001,
+    "medianMiBps": 0.5065075766994382,
+    "allChecksumVerified": true,
+    "p95": null,
+    "scope": "production SFTP middle-layer, exploratory only"
+  },
+  "downloadLarge": {
+    "file": "sshx-batch3-sftp-macos-30b72adb-ae70-47fc-820c-990319310286.jsonl",
+    "samples": 5,
+    "sortedElapsedMs": [
+      113366.731042,
+      113406.630458,
+      113482.54045900001,
+      113565.66125,
+      113599.150458
+    ],
+    "minMs": 113366.731042,
+    "medianMs": 113482.54045900001,
+    "maxMs": 113599.150458,
+    "medianMiBps": 0.5639634056581814,
+    "allChecksumVerified": true,
+    "p95": null,
+    "scope": "production SFTP middle-layer, exploratory only"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "command": [
+    "pnpm",
+    "build"
+  ],
+  "startedAt": "2026-09-28T02:52:04.777Z",
+  "finishedAt": "2026-09-28T02:52:08.712Z",
+  "elapsedSeconds": 3.933,
+  "exitCode": 0,
+  "signal": null
+}

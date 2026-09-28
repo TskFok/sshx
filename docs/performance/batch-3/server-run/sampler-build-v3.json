@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-09-28T03:48:19.412Z",
+  "commit": "0eab0f961dc0b9ee7eb9d28a60076bbc98900d4e",
+  "profile": "release",
+  "compileCommand": "cargo test --release --manifest-path src-tauri/Cargo.toml --locked benchmark_production_sftp_ --no-run",
+  "scope": "production SFTP methods and sequential batch diagnostic; cfg(test), excludes DB/IPC/UI",
+  "changes": "fixed safe error messages; sample directory creation outside timing; add partial-download cancellation and A/B sequential batch diagnostics",
+  "files": [
+    {
+      "path": "src-tauri/src/ssh/session/openssh.rs",
+      "sha256": "acd6fa30c6276b26b14b1c56000a7e77d91c2bbb89fcf26491f040716647a3cc"
+    },
+    {
+      "path": "src-tauri/src/ssh/session/openssh_benchmark.rs",
+      "sha256": "923107a127f8f0bd4d5a90de62d1632fe5ac845cda7b3e8dfb13358c72100128"
+    },
+    {
+      "path": "src-tauri/Cargo.lock",
+      "sha256": "3567e48cf3dcdef414bf36e60bf60be19330cef1a96511632f482107f5ffdc37"
+    },
+    {
+      "path": "src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf",
+      "sha256": "ac247a8068dc41f79e5a1559498020c322294bfdaa781f6d8b09e43fc044bb20"
+    },
+    {
+      "path": "docs/performance/batch-3/run-diagnostic.mjs",
+      "sha256": "40e4cece68490ad4fdb00d209b7e652874bf29b7106843bfcfa93950e0475dca"
+    }
+  ]
+}

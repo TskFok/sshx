@@ -1,0 +1,30 @@
+{"startedAt":"2026-09-28T04:40:16.603Z","executable":"/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","args":["-lp","/Users/ushopal/workspace/myself/sshx/src-tauri/target/release/deps/sshx_lib-699ffd1f210a1fcf","benchmark_production_sftp_download_cancel_isolation","--ignored","--nocapture"],"samples":1,"scope":"production SFTP method diagnostic; no DB/IPC/UI"}
+
+running 1 test
+双任务取消隔离采样文件：sshx-batch3-sftp-cancel-isolation-macos-045999ec-1635-415e-aca7-50e7e2f58336.jsonl
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel_isolation has been running for over 60 seconds
+test ssh::session::openssh::openssh_benchmark::benchmark_production_sftp_download_cancel_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 224 filtered out; finished in 116.61s
+
+real 116.62
+user 0.54
+sys 0.42
+            11894784  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3765  page reclaims
+                 429  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 309  messages sent
+                8918  messages received
+                   2  signals received
+                8257  voluntary context switches
+               10610  involuntary context switches
+           215278596  instructions retired
+           337706513  cycles elapsed
+             2770112  peak memory footprint
+{"startedAt":"2026-09-28T04:40:16.603Z","finishedAt":"2026-09-28T04:42:13.494Z","elapsedSeconds":116.886270417,"exitCode":0,"signal":null,"mode":"isolation","samples":1,"timeout":false,"psError":false,"rootObserved":true,"observedPeakSftpProcesses":2,"observedPeakRssKiB":28224,"remainingObservedOwnedProcesses":[],"cleanupSignals":[],"notes":"500ms descendant sampling: peak is only observed lower bound; no observed remnants at finish is not proof of no leaks; excludes independently created ControlMaster and unobserved short-lived children; process identity checked with start time and executable; CPU timing includes hashing"}

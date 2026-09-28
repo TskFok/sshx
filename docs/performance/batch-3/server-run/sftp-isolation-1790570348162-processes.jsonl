@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-28T04:39:08.205Z","sftp":0,"rssKiB":1280,"processes":[{"pid":54792,"ppid":54790,"rssKiB":1136,"birth":"Mon Sep 28 12:39:08 2026","command":"(time)"},{"pid":54794,"ppid":54792,"rssKiB":144,"birth":"Mon Sep 28 12:39:08 2026","command":"(sshx_lib-699ffd1)"}]}
+{"timestamp":"2026-09-28T04:39:08.459Z","sftp":0,"rssKiB":0,"processes":[]}

@@ -1,0 +1,46 @@
+{
+  "recordedAt": "2026-09-28T02:56:03.643Z",
+  "note": "仅锁定源码审查，不证明真实WebView或SSH运行行为",
+  "files": [
+    {
+      "path": "src-tauri/Cargo.lock",
+      "sha256": "3567e48cf3dcdef414bf36e60bf60be19330cef1a96511632f482107f5ffdc37"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "8325f3126a8396ce7929479679dd068a538efb36b44c6db4ef1656621fa330f4"
+    },
+    {
+      "path": "vite.config.ts",
+      "sha256": "ead3038a02fb161507d915f9447829782688326248f473a9e7399ca4951a4fe1"
+    },
+    {
+      "path": "node_modules/@tauri-apps/api/core.js",
+      "sha256": "b2187a1c0c0a25806dc64f8823757ce553c09d3bbe3e409bd05cab32e245f1c9"
+    },
+    {
+      "path": "node_modules/@tauri-apps/api/core.d.ts",
+      "sha256": "db60ed38e38bea3fabc38769e626552f9fe9e2c0c7a4e40e7ead930b46840910"
+    },
+    {
+      "path": "/Users/ushopal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-2.11.2/src/ipc/mod.rs",
+      "sha256": "8c18c612897de97dc4e1b3c1aa62869b66d610e85093e2015b1b6abc3418364d"
+    },
+    {
+      "path": "/Users/ushopal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-2.11.2/src/ipc/channel.rs",
+      "sha256": "8533436b36afb959401052ab0bd7990c63817e9d984fe0daa49a80bc6ed35e5f"
+    },
+    {
+      "path": "/Users/ushopal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/russh-sftp-2.1.1/src/client/rawsession.rs",
+      "sha256": "3b50dfd62ac6cd819e7f914b131c8da75a55cfa4ab503c060381736ccd2d4484"
+    },
+    {
+      "path": "/Users/ushopal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/russh-sftp-2.1.1/src/client/session.rs",
+      "sha256": "459471e102c9a03dd5b3bafb472c7c9f0aadeaebee4e20d655123fcce81226d9"
+    },
+    {
+      "path": "/Users/ushopal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/russh-sftp-2.1.1/src/client/fs/file.rs",
+      "sha256": "25b1e3d85be37849fe8bea910f8183110b0a2be2560afb859a9e80db2334b27d"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "createdAt": "2026-09-28T02:51:44.136Z",
+  "directory": "/var/folders/s6/l640vz115nd5fh4dnjvgq7sc0000gn/T/sshx-batch3-fixture",
+  "smallFiles": 100,
+  "smallFileBytes": 32768,
+  "largeFileBytes": 67108864,
+  "totalFiles": 101,
+  "totalBytes": 70385664,
+  "sha256File": "fixture.sha256",
+  "generation": "计划任务1步骤2；小文件填充值为序号0..99，大文件填充值65。已有文件仅在散列一致时复用。",
+  "uploaded": false
+}
