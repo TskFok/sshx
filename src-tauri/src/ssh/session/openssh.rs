@@ -1117,7 +1117,8 @@ fn command_output_with_deadline(
     command: &mut std::process::Command,
     timeout: Duration,
 ) -> Result<String, String> {
-    use std::os::fd::OwnedFd;
+    use nix::poll::{poll, PollFd, PollFlags};
+    use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::net::UnixStream;
     use std::process::Stdio;
     // 使用非阻塞 socket 承接 stdout；子进程退出但后代持有输出句柄时同样遵守截止。
@@ -1168,7 +1169,15 @@ fn command_output_with_deadline(
                     return Ok(String::from_utf8_lossy(&bytes).into_owned());
                 }
             }
-            thread::sleep(Duration::from_millis(10));
+            // 输出就绪时立即继续排空，避免固定休眠将大输出拖到截止时间。
+            let mut fds = [PollFd::new(output.as_raw_fd(), PollFlags::POLLIN)];
+            // EOF 后仅等待下一轮子进程状态检查，避免关闭的 socket 导致忙循环。
+            let fds = if eof { &mut [][..] } else { &mut fds[..] };
+            let wait_ms = timeout.saturating_sub(start.elapsed()).as_millis().min(10) as i32;
+            match poll(fds, wait_ms) {
+                Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+                Err(error) => return Err(format!("等待进度探测输出失败: {error}")),
+            }
         }
     })();
     if result.is_err() {
@@ -2612,10 +2621,36 @@ mod tests {
     #[test]
     fn sftp_batch_probe_drains_large_stdout_without_retaining_it() {
         let mut command = std::process::Command::new("/bin/sh");
-        command.args(["-c", "printf '5\\n'; head -c 1048576 /dev/zero"]);
+        // 16 MiB 足以暴露按读取批次固定休眠造成的吞吐限制。
+        command.args([
+            "-c",
+            "printf '5\\n'; exec dd if=/dev/zero bs=65536 count=256",
+        ]);
         let output = command_output_with_deadline(&mut command, SFTP_PROBE_TIMEOUT).unwrap();
         assert_eq!(parse_wc_file_size(&output).unwrap(), 5);
         assert!(output.len() <= 128);
+    }
+
+    #[test]
+    fn sftp_batch_probe_deadline_covers_continuous_stdout() {
+        let mut command = std::process::Command::new("/usr/bin/yes");
+        command.arg("5");
+        let start = Instant::now();
+        let error =
+            command_output_with_deadline(&mut command, Duration::from_millis(80)).unwrap_err();
+        assert!(error.contains("超时"), "{error}");
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn sftp_batch_probe_deadline_waits_for_child_after_stdout_eof() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "exec 1>&-; exec /bin/sleep 20"]);
+        let start = Instant::now();
+        let error =
+            command_output_with_deadline(&mut command, Duration::from_millis(80)).unwrap_err();
+        assert!(error.contains("超时"), "{error}");
+        assert!(start.elapsed() < Duration::from_millis(500));
     }
 
     #[test]
