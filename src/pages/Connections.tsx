@@ -683,13 +683,46 @@ export function Connections() {
     : null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">连接管理</h2>
-          <p className="text-muted-foreground">管理你的 SSH 连接和分组</p>
+    <div className="-mt-6">
+      {/* 抵消主容器的 p-6，让固定区域完整覆盖顶部和两侧留白。 */}
+      <div className="sticky -top-6 z-10 -mx-6 flex flex-wrap items-center gap-4 bg-background p-6">
+        <div className="flex min-w-0 flex-1 basis-80 items-center gap-4">
+          <div className="relative min-w-0 max-w-sm flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              aria-label="搜索连接"
+              placeholder="搜索连接..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          {groups.length > 0 && (
+            <Select
+              value={selectedGroup ?? "all"}
+              onValueChange={(v) => setSelectedGroup(v === "all" ? null : v)}
+            >
+              <SelectTrigger className="w-[180px] shrink-0">
+                <SelectValue placeholder="全部分组" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部分组</SelectItem>
+                {groups.map((g) => (
+                  <SelectItem key={g.id} value={g.id}>
+                    <span className="flex items-center gap-2">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: g.color }}
+                      />
+                      {g.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="ml-auto flex flex-wrap gap-2">
           <Button
             variant="outline"
             onClick={handleExportConnections}
@@ -734,45 +767,9 @@ export function Connections() {
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="搜索连接..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-        {groups.length > 0 && (
-          <Select
-            value={selectedGroup ?? "all"}
-            onValueChange={(v) => setSelectedGroup(v === "all" ? null : v)}
-          >
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="全部分组" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部分组</SelectItem>
-              {groups.map((g) => (
-                <SelectItem key={g.id} value={g.id}>
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: g.color }}
-                    />
-                    {g.name}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
-
       {transferMessage && (
         <div
-          className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
+          className={`mb-6 flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
             transferMessage.ok
               ? "bg-green-500/10 text-green-600 dark:text-green-400"
               : "bg-destructive/10 text-destructive"

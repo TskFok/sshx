@@ -34,9 +34,6 @@ async function importMainLayoutForRoute(
   vi.doMock("./Sidebar", () => ({
     Sidebar: () => null,
   }));
-  vi.doMock("./Header", () => ({
-    Header: () => null,
-  }));
   vi.doMock("@/components/ui/tooltip", () => ({
     TooltipProvider: ({ children }: { children: React.ReactNode }) => children,
   }));
@@ -73,7 +70,6 @@ describe("MainLayout scroll restoration", () => {
     vi.doUnmock("react");
     vi.doUnmock("react-router-dom");
     vi.doUnmock("./Sidebar");
-    vi.doUnmock("./Header");
     vi.doUnmock("@/components/ui/tooltip");
     vi.doUnmock("@/pages/TerminalPage");
     vi.doUnmock("@/pages/FileTransferWorkspace");

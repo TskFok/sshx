@@ -22,7 +22,6 @@ vi.mock("@/pages/FileTransferWorkspace", () => {
   } };
 });
 vi.mock("./Sidebar", () => ({ Sidebar: () => null }));
-vi.mock("./Header", () => ({ Header: () => null }));
 vi.mock("@/lib/connectionCatalog", () => ({ loadConnectionCatalog: () => Promise.resolve() }));
 
 let root: Root;

@@ -1,7 +1,6 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
-import { Header } from "./Header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createLazyPage } from "./LazyPage";
 import { getVisitedWorkspaces } from "./workspaceMount";
@@ -60,7 +59,6 @@ export function MainLayout() {
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
         <div className="flex flex-1 flex-col overflow-hidden">
-          {!isTerminal && <Header />}
           <main
             ref={mainScrollRef}
             className="flex-1 overflow-auto overscroll-none bg-muted/30 p-6"
