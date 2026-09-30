@@ -514,35 +514,6 @@ export function Settings() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>诊断</CardTitle>
-          <CardDescription>
-            默认关闭。仅在需要排查连接问题时开启；会占用少量内存并记录 sshx 相关日志（Windows/Linux
-            为 russh；macOS 为系统 OpenSSH / portable-pty）。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3">
-            <input
-              id="diagnostic-logging"
-              type="checkbox"
-              className="h-4 w-4 rounded border-input"
-              checked={form.diagnosticLoggingEnabled}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  diagnosticLoggingEnabled: e.target.checked,
-                })
-              }
-            />
-            <Label htmlFor="diagnostic-logging" className="cursor-pointer font-normal">
-              收集诊断日志（关闭后已缓冲的日志会被清空）
-            </Label>
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="flex justify-end">
         <Button onClick={handleSave}>
           <Save className="mr-2 h-4 w-4" />

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Link } from "react-router-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { SSHX_SETTINGS_UPDATED_EVENT } from "@/lib/settingsEvents";
 import {
   Card,
   CardContent,
@@ -52,18 +53,21 @@ export function Diagnostics() {
   const [entries, setEntries] = useState<DiagnosticLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [captureEnabled, setCaptureEnabled] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
   const loadLogs = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
       const settings = await invoke<AppSettingsDiag>("get_settings");
       setCaptureEnabled(settings.diagnosticLoggingEnabled ?? false);
       const rows = await invoke<DiagnosticLogEntry[]>("diagnostic_logs_get");
       setEntries(rows);
-    } catch {
-      setEntries([]);
-      setCaptureEnabled(false);
+    } catch (err) {
+      setError(`加载诊断日志失败：${String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -75,8 +79,10 @@ export function Diagnostics() {
 
   useEffect(() => {
     if (!captureEnabled) return;
+    let disposed = false;
     let unlisten: UnlistenFn | undefined;
     listen<DiagnosticLogEntry>("diagnostic-log", (e) => {
+      if (disposed) return;
       setEntries((prev) => {
         const next = [...prev, e.payload];
         if (next.length > 3000) {
@@ -85,9 +91,11 @@ export function Diagnostics() {
         return next;
       });
     }).then((u) => {
-      unlisten = u;
+      if (disposed) u();
+      else unlisten = u;
     });
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, [captureEnabled]);
@@ -97,6 +105,25 @@ export function Diagnostics() {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [entries, autoScroll]);
+
+  const toggleCapture = async (enabled: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const settings = await invoke<AppSettingsDiag>("get_settings");
+      await invoke("update_settings", {
+        settings: { ...settings, diagnosticLoggingEnabled: enabled },
+      });
+      setCaptureEnabled(enabled);
+      if (enabled) await loadLogs();
+      else setEntries([]);
+      window.dispatchEvent(new CustomEvent(SSHX_SETTINGS_UPDATED_EVENT));
+    } catch (err) {
+      setError(`保存诊断日志设置失败：${String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const clearLogs = async () => {
     await invoke("diagnostic_logs_clear");
@@ -129,7 +156,7 @@ export function Diagnostics() {
               <div>
                 <CardTitle>诊断日志</CardTitle>
                 <CardDescription className="mt-1">
-                  需先在「设置」中开启「收集诊断日志」。开启后记录 SSH
+                  开启收集后记录 SSH
                   连接、认证、keyboard-interactive 及本应用相关日志。日志可能包含主机、用户名或路径，分享前请先审阅。
                 </CardDescription>
               </div>
@@ -142,7 +169,7 @@ export function Diagnostics() {
               >
                 {autoScroll ? "关闭自动滚动" : "开启自动滚动"}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => loadLogs()}>
+              <Button variant="outline" size="sm" onClick={() => loadLogs()} disabled={loading || saving}>
                 <RefreshCw className="mr-1.5 h-4 w-4" />
                 刷新
               </Button>
@@ -150,7 +177,7 @@ export function Diagnostics() {
                 <ClipboardCopy className="mr-1.5 h-4 w-4" />
                 复制全部
               </Button>
-              <Button variant="destructive" size="sm" onClick={clearLogs}>
+              <Button variant="destructive" size="sm" onClick={clearLogs} disabled={loading || saving}>
                 <Trash2 className="mr-1.5 h-4 w-4" />
                 清空
               </Button>
@@ -158,18 +185,34 @@ export function Diagnostics() {
           </div>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 space-y-2">
+            <div className="flex items-center gap-3">
+              <input
+                id="diagnostic-logging"
+                type="checkbox"
+                className="h-4 w-4 rounded border-input disabled:cursor-not-allowed disabled:opacity-50"
+                checked={captureEnabled}
+                disabled={loading || saving}
+                onChange={(e) => void toggleCapture(e.target.checked)}
+                aria-describedby="diagnostic-logging-description"
+              />
+              <Label htmlFor="diagnostic-logging" className="cursor-pointer font-normal">
+                收集诊断日志
+              </Label>
+              {saving && <span className="text-sm text-muted-foreground">正在保存…</span>}
+            </div>
+            <p id="diagnostic-logging-description" className="text-xs text-muted-foreground">
+              默认关闭，仅在排查连接问题时开启。切换后立即保存，关闭后已缓冲的日志会被清空。
+            </p>
+          </div>
+          {error && (
+            <p role="alert" className="mb-4 text-sm text-destructive">{error}</p>
+          )}
           {!loading && !captureEnabled && (
             <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100">
               <p className="font-medium">诊断收集当前为关闭状态</p>
               <p className="mt-1 text-amber-800/90 dark:text-amber-200/90">
-                未开启时不会写入日志。请前往{" "}
-                <Link
-                  to="/settings"
-                  className="underline font-medium text-amber-900 dark:text-amber-100"
-                >
-                  设置 → 诊断
-                </Link>{" "}
-                打开「收集诊断日志」并保存后，再返回此处刷新。
+                未开启时不会写入日志。打开上方「收集诊断日志」即可开始记录。
               </p>
             </div>
           )}
