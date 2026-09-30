@@ -27,6 +27,7 @@ export function shouldResetFileTransferScroll(pathname: string): boolean {
 export function MainLayout() {
   const location = useLocation();
   const isTerminal = location.pathname === "/terminal";
+  const isDiagnostics = location.pathname === "/diagnostics";
   const isFileTransfer =
     location.pathname === "/file-transfer" ||
     location.pathname.startsWith("/file-transfer/");
@@ -58,10 +59,12 @@ export function MainLayout() {
     <TooltipProvider>
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <main
             ref={mainScrollRef}
-            className="flex-1 overflow-auto overscroll-none bg-muted/30 p-6"
+            className={isDiagnostics
+              ? "min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+              : "flex-1 overflow-auto overscroll-none bg-muted/30 p-6"}
             style={{ display: isPersistentWorkspace ? "none" : undefined }}
           >
             <Outlet />
