@@ -236,8 +236,9 @@ export function Settings() {
   };
 
   return (
-    <div className="min-w-0 space-y-5">
-      <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-background px-4 py-3">
+    <div className="-mt-6 min-w-0 space-y-5">
+      {/* 抵消主容器的 p-6，让吸顶栏完整覆盖顶部和两侧留白。 */}
+      <div className="sticky -top-6 z-10 -mx-6 flex flex-wrap items-center justify-between gap-3 bg-background p-6">
         <div>
           <h2 className="text-xl font-semibold tracking-tight">设置</h2>
           <p className="mt-1 text-sm text-muted-foreground">调整外观与终端，让工作环境更顺手。</p>
