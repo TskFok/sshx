@@ -237,7 +237,7 @@ export function Settings() {
 
   return (
     <div className="min-w-0 space-y-5">
-      <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-background/95 px-4 py-3 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-background px-4 py-3">
         <div>
           <h2 className="text-xl font-semibold tracking-tight">设置</h2>
           <p className="mt-1 text-sm text-muted-foreground">调整外观与终端，让工作环境更顺手。</p>
