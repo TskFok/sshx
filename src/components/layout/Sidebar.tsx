@@ -1,6 +1,5 @@
 import { NavLink } from "react-router-dom";
 import {
-  LayoutDashboard,
   Server,
   FolderOpen,
   Terminal,
@@ -19,11 +18,6 @@ import {
 } from "@/components/ui/tooltip";
 
 const navItems = [
-  {
-    label: "仪表盘",
-    icon: LayoutDashboard,
-    path: "/",
-  },
   {
     label: "连接管理",
     icon: Server,
@@ -88,7 +82,6 @@ export function Sidebar() {
               <NavLink
                 key={item.path}
                 to={item.path}
-                end={item.path === "/"}
                 className={({ isActive }) =>
                   cn(
                     "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",

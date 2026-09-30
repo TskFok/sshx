@@ -32,8 +32,7 @@
 
 > 待补充（欢迎 PR 提供截图）
 
-- Dashboard
-- Connections
+- Connections（连接管理，默认界面）
 - Terminal (多标签/缩放/认证弹窗)
 
 ## 技术栈

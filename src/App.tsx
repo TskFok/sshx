@@ -1,11 +1,10 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { createLazyPage } from "@/components/layout/LazyPage";
 import { useAppStore } from "@/store";
 import { useEffect } from "react";
 import { HostKeyTrustDialog } from "@/components/ssh/HostKeyTrustDialog";
 
-const Dashboard = createLazyPage(() => import("@/pages/Dashboard").then((m) => ({ default: m.Dashboard })), "仪表盘");
 const Connections = createLazyPage(() => import("@/pages/Connections").then((m) => ({ default: m.Connections })), "连接管理");
 const Settings = createLazyPage(() => import("@/pages/Settings").then((m) => ({ default: m.Settings })), "设置");
 const Diagnostics = createLazyPage(() => import("@/pages/Diagnostics").then((m) => ({ default: m.Diagnostics })), "诊断");
@@ -21,7 +20,7 @@ function App() {
     <>
       <Routes>
         <Route element={<MainLayout />}>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Navigate to="/connections" replace />} />
           <Route path="/connections" element={<Connections />} />
           <Route path="/file-transfer" element={<></>} />
           <Route path="/file-transfer/:connectionId" element={<></>} />

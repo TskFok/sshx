@@ -11,7 +11,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 const pageTitles: Record<string, string> = {
-  "/": "仪表盘",
+  "/": "连接管理",
   "/connections": "连接管理",
   "/terminal": "终端",
   "/settings": "设置",
