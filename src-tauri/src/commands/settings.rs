@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::diagnostic;
 use crate::models::AppSettings;
+use crate::terminal_charset::normalize_terminal_charset;
 use rusqlite::Connection;
 use tauri::{AppHandle, State};
 
@@ -22,7 +23,7 @@ fn write_settings(conn: &Connection, settings: &AppSettings) -> Result<(), rusql
          ('terminal_color_scheme', ?4), ('terminal_dynamic_wallpaper_path', ?5), \
          ('terminal_dynamic_theme_json', ?6), ('terminal_dynamic_wallpaper_opacity', ?7), \
          ('terminal_cursor_style', ?8), ('terminal_scrollback_lines', ?9), \
-         ('diagnostic_logging_enabled', ?10) \
+         ('diagnostic_logging_enabled', ?10), ('terminal_charset', ?11) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         rusqlite::params![
             settings.font_size.to_string(),
@@ -35,6 +36,7 @@ fn write_settings(conn: &Connection, settings: &AppSettings) -> Result<(), rusql
             &settings.terminal_cursor_style,
             settings.terminal_scrollback_lines.to_string(),
             settings.diagnostic_logging_enabled.to_string(),
+            &settings.terminal_charset,
         ],
     )?;
     Ok(())
@@ -52,6 +54,7 @@ where
         clamp_terminal_scrollback_lines(settings.terminal_scrollback_lines);
     settings.terminal_dynamic_wallpaper_opacity =
         clamp_terminal_wallpaper_opacity(settings.terminal_dynamic_wallpaper_opacity);
+    settings.terminal_charset = normalize_terminal_charset(&settings.terminal_charset).to_string();
 
     {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
@@ -60,6 +63,18 @@ where
 
     capture(settings.diagnostic_logging_enabled);
     Ok(())
+}
+
+/// 已保存的终端字符集。缺键或无法识别时为 `utf-8`。
+pub(crate) fn stored_terminal_charset(conn: &Connection) -> String {
+    let value: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'terminal_charset'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    normalize_terminal_charset(&value).to_string()
 }
 
 /// 从设置表读取「是否收集诊断日志」，无键则为 false。
@@ -113,6 +128,9 @@ pub fn get_settings(db: State<'_, Database>) -> Result<AppSettings, String> {
             "diagnostic_logging_enabled" => {
                 settings.diagnostic_logging_enabled = value == "true";
             }
+            "terminal_charset" => {
+                settings.terminal_charset = normalize_terminal_charset(&value).to_string();
+            }
             _ => {}
         }
     }
@@ -134,7 +152,7 @@ pub fn update_settings(
 #[cfg(test)]
 mod scrollback_tests {
     use super::{
-        clamp_terminal_scrollback_lines, clamp_terminal_wallpaper_opacity,
+        clamp_terminal_scrollback_lines, clamp_terminal_wallpaper_opacity, stored_terminal_charset,
         update_settings_with_capture, write_settings, TERMINAL_SCROLLBACK_MAX,
         TERMINAL_SCROLLBACK_MIN,
     };
@@ -163,6 +181,7 @@ mod scrollback_tests {
             terminal_cursor_style: "underline".into(),
             terminal_scrollback_lines: 120_000,
             diagnostic_logging_enabled: true,
+            terminal_charset: "gbk".into(),
         }
     }
 
@@ -194,6 +213,7 @@ mod scrollback_tests {
         assert_eq!(inserted["terminal_cursor_style"], "underline");
         assert_eq!(inserted["terminal_scrollback_lines"], "120000");
         assert_eq!(inserted["diagnostic_logging_enabled"], "true");
+        assert_eq!(inserted["terminal_charset"], "gbk");
         assert_eq!(inserted["internal_key"], "keep");
 
         let updated = AppSettings::default();
@@ -213,6 +233,7 @@ mod scrollback_tests {
         assert_eq!(after["terminal_cursor_style"], "block");
         assert_eq!(after["terminal_scrollback_lines"], "50000");
         assert_eq!(after["diagnostic_logging_enabled"], "false");
+        assert_eq!(after["terminal_charset"], "utf-8");
         assert_eq!(after["internal_key"], "keep");
     }
 
@@ -314,5 +335,23 @@ mod scrollback_tests {
         assert_eq!(clamp_terminal_wallpaper_opacity(101), 100);
         assert_eq!(clamp_terminal_wallpaper_opacity(42), 42);
         assert_eq!(clamp_terminal_wallpaper_opacity(0), 0);
+    }
+
+    #[test]
+    fn terminal_charset_is_normalized_before_it_is_stored() {
+        let db = Database(Mutex::new(create_test_db()));
+        let mut settings = AppSettings::default();
+        settings.terminal_charset = "GBK".into();
+        update_settings_with_capture(&db, settings, |_| {}).unwrap();
+        {
+            let conn = db.0.lock().unwrap();
+            assert_eq!(stored_terminal_charset(&conn), "gbk");
+        }
+
+        let mut settings = AppSettings::default();
+        settings.terminal_charset = "latin1".into();
+        update_settings_with_capture(&db, settings, |_| {}).unwrap();
+        let conn = db.0.lock().unwrap();
+        assert_eq!(stored_terminal_charset(&conn), "utf-8");
     }
 }

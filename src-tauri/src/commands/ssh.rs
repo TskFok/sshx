@@ -25,6 +25,11 @@ use tauri::{AppHandle, State};
 #[cfg(not(target_os = "macos"))]
 use tokio::sync::mpsc;
 
+fn terminal_charset_from_db(db: &Database) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    Ok(super::settings::stored_terminal_charset(&conn))
+}
+
 #[tauri::command]
 pub async fn ssh_connect(
     app: AppHandle,
@@ -95,6 +100,7 @@ pub async fn ssh_connect(
             "使用系统 OpenSSH（/usr/bin/ssh）与 PTY 子进程",
         );
         let app_for_err = app.clone();
+        let terminal_charset = terminal_charset_from_db(&db)?;
         let session = crate::ssh::session::connect_openssh(
             app,
             &*auth_prompts,
@@ -109,6 +115,7 @@ pub async fn ssh_connect(
             connection.keepalive_interval_secs,
             connection.keepalive_max,
             request.output_flow_control,
+            &terminal_charset,
         )
         .await
         .map_err(|e| {
@@ -281,6 +288,7 @@ pub async fn ssh_connect(
         );
 
         let app_for_err = app.clone();
+        let terminal_charset = terminal_charset_from_db(&db)?;
         let session = SshSession::from_authenticated_handle(
             session_id.clone(),
             request.connection_id,
@@ -289,6 +297,7 @@ pub async fn ssh_connect(
             request.rows,
             app,
             request.output_flow_control,
+            &terminal_charset,
         )
         .await
         .map_err(|e| {

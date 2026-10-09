@@ -23,6 +23,7 @@ const storedSettings = {
   terminalDynamicWallpaperOpacity: 63,
   terminalCursorStyle: "bar",
   terminalScrollbackLines: 12345,
+  terminalCharset: "gbk",
   diagnosticLoggingEnabled: true,
 };
 
@@ -143,11 +144,30 @@ describe("Settings 设置交互", () => {
     expect(inputValues).toEqual(expect.arrayContaining(["19", "Fira Code, monospace", "12345"]));
     const selectValues = [...container.querySelectorAll('[role="combobox"]')]
       .map((select) => select.textContent);
-    expect(selectValues).toEqual(expect.arrayContaining(["竖线", "Symphony · Nordic"]));
+    expect(selectValues).toEqual(expect.arrayContaining(["竖线", "GBK", "Symphony · Nordic"]));
 
     await clickButton("保存设置");
     expect(invoke).toHaveBeenCalledWith("update_settings", {
       settings: storedSettings,
+    });
+  });
+
+  it("未保存字符集时按 UTF-8 回填并写回", async () => {
+    const { terminalCharset: _charset, ...withoutCharset } = storedSettings;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return withoutCharset;
+      if (command === "update_settings") return undefined;
+      throw new Error(`未预期的 Tauri 命令：${command}`);
+    });
+
+    await mountSettings();
+    const selectValues = [...container.querySelectorAll('[role="combobox"]')]
+      .map((select) => select.textContent);
+    expect(selectValues).toContain("UTF-8");
+
+    await clickButton("保存设置");
+    expect(invoke).toHaveBeenCalledWith("update_settings", {
+      settings: { ...storedSettings, terminalCharset: "utf-8" },
     });
   });
 });

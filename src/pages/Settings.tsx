@@ -28,6 +28,11 @@ import {
   MIN_TERMINAL_SCROLLBACK_LINES,
 } from "@/lib/terminalConfig";
 import {
+  DEFAULT_TERMINAL_CHARSET,
+  normalizeTerminalCharset,
+  TERMINAL_CHARSETS,
+} from "@/lib/terminalCharset";
+import {
   clampTerminalWallpaperOpacity,
   DEFAULT_TERMINAL_WALLPAPER_OPACITY,
   MAX_TERMINAL_WALLPAPER_OPACITY,
@@ -57,6 +62,7 @@ interface SettingsForm {
   terminalDynamicWallpaperOpacity: number;
   terminalCursorStyle: string;
   terminalScrollbackLines: number;
+  terminalCharset: string;
   diagnosticLoggingEnabled: boolean;
 }
 
@@ -73,6 +79,7 @@ export function Settings() {
     terminalDynamicWallpaperOpacity: DEFAULT_TERMINAL_WALLPAPER_OPACITY,
     terminalCursorStyle: "block",
     terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
+    terminalCharset: DEFAULT_TERMINAL_CHARSET,
     diagnosticLoggingEnabled: false,
   });
   const [saved, setSaved] = useState(false);
@@ -120,6 +127,7 @@ export function Settings() {
           ),
           terminalCursorStyle: s.terminalCursorStyle,
           terminalScrollbackLines,
+          terminalCharset: normalizeTerminalCharset(s.terminalCharset),
           diagnosticLoggingEnabled: s.diagnosticLoggingEnabled,
         },
       });
@@ -166,6 +174,7 @@ export function Settings() {
             settings.terminalScrollbackLines ??
               DEFAULT_TERMINAL_SCROLLBACK_LINES
           ),
+          terminalCharset: normalizeTerminalCharset(settings.terminalCharset),
           diagnosticLoggingEnabled:
             settings.diagnosticLoggingEnabled ?? false,
         });
@@ -191,6 +200,7 @@ export function Settings() {
           ),
           terminalCursorStyle: form.terminalCursorStyle,
           terminalScrollbackLines,
+          terminalCharset: normalizeTerminalCharset(form.terminalCharset),
           diagnosticLoggingEnabled: form.diagnosticLoggingEnabled,
         },
       });
@@ -296,7 +306,7 @@ export function Settings() {
               <Terminal className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
               终端显示
             </h3>
-            <CardDescription className="text-xs">配置文字、光标与滚动历史</CardDescription>
+            <CardDescription className="text-xs">配置文字、字符集、光标与滚动历史</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5 p-5">
             <div className="min-w-0 space-y-2">
@@ -340,6 +350,23 @@ export function Settings() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="space-y-2 border-t pt-4">
+              <Label htmlFor="terminal-charset">字符集</Label>
+              <Select
+                value={form.terminalCharset}
+                onValueChange={(v) => setForm({ ...form, terminalCharset: v })}
+              >
+                <SelectTrigger id="terminal-charset" className="h-9" aria-describedby="terminal-charset-hint"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {TERMINAL_CHARSETS.map((charset) => (
+                    <SelectItem key={charset.id} value={charset.id}>{charset.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p id="terminal-charset-hint" className="text-xs leading-relaxed text-muted-foreground">
+                远程终端和 vi 使用这个编码。默认 UTF-8。保存后，下次连接生效；服务器需要已安装对应语言环境。
+              </p>
             </div>
             <div className="space-y-2 border-t pt-4">
               <div className="flex flex-wrap items-center justify-between gap-3">

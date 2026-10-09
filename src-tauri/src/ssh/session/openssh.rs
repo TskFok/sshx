@@ -527,6 +527,7 @@ pub async fn connect_openssh(
     keepalive_interval_secs: u32,
     keepalive_max: u32,
     output_flow_control: bool,
+    terminal_charset: &str,
 ) -> Result<SshSession, String> {
     let log_path = temp_log_path()?;
     record_event(
@@ -552,6 +553,7 @@ pub async fn connect_openssh(
         &log_path,
         None,
         Some(&control_path),
+        terminal_charset,
     )?;
 
     let AuthenticatedPty {
@@ -594,23 +596,30 @@ pub async fn connect_openssh(
     let end_guard = SessionEndGuard::new(lifecycle.clone());
     let writer_loop = writer.clone();
     let master_loop = master.clone();
+    let input_charset = terminal_charset.to_string();
+    let output_charset = terminal_charset.to_string();
 
     let (input, mut input_rx, mut resize_rx) = InputSender::new(cols, rows);
     let mut writer_closed = lifecycle.subscribe();
     let writer_end_guard = SessionEndGuard::new(lifecycle.clone());
     tokio::spawn(async move {
         let _end_guard = writer_end_guard;
+        let mut encoder = crate::terminal_charset::CharsetEncoder::new(&input_charset);
         loop {
             tokio::select! {
                 _ = async { let _ = writer_closed.wait_for(|closed| *closed).await; } => break,
                 chunk = input_rx.recv() => {
                     let Some(chunk) = chunk else { break; };
+                    let encoded = encoder.encode(&chunk.bytes);
                     let w = writer_loop.clone();
                     // Keep the chunk (and byte permit) in the blocking task until write/flush finish.
                     match tokio::task::spawn_blocking(move || {
                         let result = (|| {
+                            if encoded.is_empty() {
+                                return Ok(());
+                            }
                             let mut writer = w.lock().map_err(|e| e.to_string())?;
-                            writer.write_all(&chunk.bytes).map_err(|e| e.to_string())?;
+                            writer.write_all(&encoded).map_err(|e| e.to_string())?;
                             writer.flush().map_err(|e| e.to_string())
                         })();
                         let failed = result.is_err();
@@ -640,14 +649,19 @@ pub async fn connect_openssh(
 
     tokio::spawn(async move {
         let _end_guard = end_guard;
+        let mut decoder = crate::terminal_charset::CharsetDecoder::new(&output_charset);
         if !output_flow_loop.reserve(0).await {
             return;
         }
         while let Some(chunk) = pty_rx.recv().await {
-            if !output_flow_loop.reserve(chunk.len()).await {
+            let bytes = decoder.decode(&chunk);
+            if bytes.is_empty() {
+                continue;
+            }
+            if !output_flow_loop.reserve(bytes.len()).await {
                 return;
             }
-            let _ = app_emit.emit(&format!("ssh-data-{sid}"), chunk);
+            let _ = app_emit.emit(&format!("ssh-data-{sid}"), bytes);
         }
         output_flow_loop.close();
         record_event(
@@ -705,6 +719,7 @@ pub async fn connect_openssh_test(
         &log_path,
         Some("true"),
         None,
+        "utf-8",
     )?;
 
     let authenticated = authenticate_pty_with_host_trust(
@@ -1335,6 +1350,7 @@ fn build_ssh_args(
     log_path: &str,
     remote_command: Option<&str>,
     control_socket: Option<&str>,
+    terminal_charset: &str,
 ) -> Result<Vec<String>, String> {
     // DEBUG3 记录 OpenSSH 原生主机查找结果，供首次信任流程区分完全未知与已有记录。
     let mut args = vec![
@@ -1393,6 +1409,8 @@ fn build_ssh_args(
         }
     }
 
+    crate::terminal_charset::append_openssh_setenv(&mut args, terminal_charset);
+
     args.push(format!("{username}@{host}"));
 
     if let Some(rc) = remote_command {
@@ -1431,6 +1449,7 @@ async fn spawn_ssh_pty(
         let mut cmd = CommandBuilder::new(SSH_BIN);
         cmd.env("TERM", "xterm-256color");
         // 主机验证只解析本地 OpenSSH 日志，固定语言确保错误分类不随系统区域改变。
+        // 远端字符集由参数里的 SetEnv 覆盖系统 ssh_config 转发的 LC_ALL=C。
         cmd.env("LC_ALL", "C");
         cmd.env("LANG", "C");
         for a in ssh_args {
@@ -2264,6 +2283,7 @@ mod tests {
                     "/tmp/test.log",
                     None,
                     None,
+                    "utf-8",
                 )
                 .unwrap(),
                 "-p",
@@ -2303,6 +2323,7 @@ mod tests {
                 "/tmp/fake.log",
                 None,
                 None,
+                "utf-8",
             )
             .unwrap(),
             build_ssh_slave_prefix("/tmp/fake.sock", 2222, "user", "example.test", &auth)
@@ -2343,6 +2364,7 @@ mod tests {
             "/tmp/ssh.log",
             None,
             None,
+            "utf-8",
         )
         .unwrap();
         assert!(args.contains(&"-p".into()) && args.contains(&"2222".into()));
@@ -2381,6 +2403,7 @@ mod tests {
             "/log",
             None,
             Some("/tmp/sshx-test.sock"),
+            "utf-8",
         )
         .unwrap();
         assert!(args.iter().any(|a| a == "ControlMaster=yes"));
@@ -2403,6 +2426,7 @@ mod tests {
             "/log",
             None,
             None,
+            "utf-8",
         )
         .unwrap();
         assert!(args.contains(&"-i".into()));
@@ -2424,6 +2448,7 @@ mod tests {
             "/log",
             Some("true"),
             None,
+            "utf-8",
         )
         .unwrap();
         assert!(args.contains(&"-i".into()));
@@ -2434,6 +2459,36 @@ mod tests {
             .iter()
             .any(|a| a == "PubkeyAcceptedAlgorithms=+ssh-rsa"));
         assert!(args.last() == Some(&"true".into()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "SetEnv=LANG=en_US.UTF-8"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "SetEnv=LC_ALL=en_US.UTF-8"]));
+    }
+
+    #[test]
+    fn build_ssh_args_sets_remote_charset_locale() {
+        let args = build_ssh_args(
+            "h",
+            22,
+            "u",
+            &AuthMethod::Password("x".into()),
+            0,
+            0,
+            "/log",
+            None,
+            None,
+            "gbk",
+        )
+        .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "SetEnv=LANG=zh_CN.GBK"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "SetEnv=LC_ALL=zh_CN.GBK"]));
+        assert!(args.last() == Some(&"u@h".to_string()));
     }
 
     #[test]

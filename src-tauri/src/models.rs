@@ -203,6 +203,10 @@ fn default_terminal_dynamic_wallpaper_opacity() -> u32 {
     40
 }
 
+fn default_terminal_charset() -> String {
+    "utf-8".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -226,6 +230,9 @@ pub struct AppSettings {
     /// 默认关闭：为 true 时收集诊断缓冲与 `log` 路由日志。
     #[serde(default)]
     pub diagnostic_logging_enabled: bool,
+    /// 远程终端字符集：`utf-8`、`gbk`、`gb2312`、`gb18030`、`big5`。
+    #[serde(default = "default_terminal_charset")]
+    pub terminal_charset: String,
 }
 
 impl Default for AppSettings {
@@ -241,6 +248,7 @@ impl Default for AppSettings {
             terminal_cursor_style: "block".to_string(),
             terminal_scrollback_lines: 50_000,
             diagnostic_logging_enabled: false,
+            terminal_charset: default_terminal_charset(),
         }
     }
 }

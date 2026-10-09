@@ -4,6 +4,7 @@ mod db;
 mod diagnostic;
 mod models;
 mod ssh;
+mod terminal_charset;
 
 use commands::{
     connection, diagnostic as diagnostic_commands, file_transfer as file_transfer_commands,

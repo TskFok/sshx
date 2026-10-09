@@ -85,6 +85,7 @@ interface AppSettingsPayload {
   terminalDynamicWallpaperOpacity?: number;
   terminalCursorStyle?: string;
   terminalScrollbackLines?: number;
+  terminalCharset?: string;
   diagnosticLoggingEnabled?: boolean;
 }
 
@@ -381,6 +382,7 @@ export function TerminalPage() {
           terminalScrollbackLines: clampTerminalScrollbackLines(
             s.terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES
           ),
+          terminalCharset: s.terminalCharset ?? "utf-8",
           diagnosticLoggingEnabled: s.diagnosticLoggingEnabled ?? false,
         },
       });

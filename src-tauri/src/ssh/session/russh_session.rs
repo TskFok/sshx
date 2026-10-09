@@ -33,17 +33,23 @@ impl SshSession {
         rows: u32,
         app: AppHandle,
         output_flow_control: bool,
+        terminal_charset: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let channel = handle.channel_open_session().await?;
         // want_reply: true — 等待服务端确认，部分堡垒机对无回复的 PTY/shell 请求会拒绝会话
         channel
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
+        let locale = crate::terminal_charset::remote_locale(terminal_charset);
+        // want_reply: false — 服务端拒绝环境变量时不能中断会话。
+        let _ = channel.set_env(false, "LANG", locale).await;
+        let _ = channel.set_env(false, "LC_ALL", locale).await;
         channel.request_shell(true).await?;
 
         let channel_id = channel.id();
         let (input, mut input_rx, mut resize_rx) = InputSender::new(cols, rows);
         let sid = id.clone();
+        let terminal_charset = terminal_charset.to_string();
         let output_flow = Arc::new(OutputFlow::new(output_flow_control));
         let output_flow_loop = output_flow.clone();
         let lifecycle = SessionLifecycle::new();
@@ -51,6 +57,8 @@ impl SshSession {
 
         tokio::spawn(async move {
             let _end_guard = end_guard;
+            let mut encoder = crate::terminal_charset::CharsetEncoder::new(&terminal_charset);
+            let mut decoder = crate::terminal_charset::CharsetDecoder::new(&terminal_charset);
             enum PendingOutput {
                 Data { bytes: Vec<u8>, offset: usize },
                 Close,
@@ -83,12 +91,17 @@ impl SshSession {
                 {
                     SessionEvent::Input(chunk) => {
                         let writer = writer.clone();
+                        let encoded = encoder.encode(&chunk.bytes);
                         has_write = true;
                         writing = Box::pin(async move {
-                            let result = writer
-                                .data(std::io::Cursor::new(&chunk.bytes))
-                                .await
-                                .map_err(|e| e.to_string());
+                            let result = if encoded.is_empty() {
+                                Ok(())
+                            } else {
+                                writer
+                                    .data(std::io::Cursor::new(encoded))
+                                    .await
+                                    .map_err(|e| e.to_string())
+                            };
                             let success = result.is_ok();
                             chunk.finish(result);
                             success
@@ -107,10 +120,10 @@ impl SshSession {
                         }
                     }
                     SessionEvent::Remote(Some(russh::ChannelMsg::Data { data })) => {
-                        pending_output = Some(PendingOutput::Data {
-                            bytes: data.to_vec(),
-                            offset: 0,
-                        });
+                        let bytes = decoder.decode(data.as_ref());
+                        if !bytes.is_empty() {
+                            pending_output = Some(PendingOutput::Data { bytes, offset: 0 });
+                        }
                     }
                     SessionEvent::Remote(Some(
                         russh::ChannelMsg::Eof | russh::ChannelMsg::Close,

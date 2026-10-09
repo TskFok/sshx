@@ -5338,6 +5338,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "base64 0.22.1",
+ "encoding_rs",
  "hmac 0.12.1",
  "keyring",
  "log",
