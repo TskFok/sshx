@@ -2461,10 +2461,7 @@ mod tests {
         assert!(args.last() == Some(&"true".into()));
         assert!(args
             .windows(2)
-            .any(|pair| pair == ["-o", "SetEnv=LANG=en_US.UTF-8"]));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["-o", "SetEnv=LC_ALL=en_US.UTF-8"]));
+            .any(|pair| pair == ["-o", "SetEnv=LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8"]));
     }
 
     #[test]
@@ -2484,10 +2481,12 @@ mod tests {
         .unwrap();
         assert!(args
             .windows(2)
-            .any(|pair| pair == ["-o", "SetEnv=LANG=zh_CN.GBK"]));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["-o", "SetEnv=LC_ALL=zh_CN.GBK"]));
+            .any(|pair| pair == ["-o", "SetEnv=LANG=zh_CN.GBK LC_ALL=zh_CN.GBK"]));
+        assert_eq!(
+            args.iter().filter(|a| a.starts_with("SetEnv=")).count(),
+            1,
+            "OpenSSH 只采用第一条 SetEnv"
+        );
         assert!(args.last() == Some(&"u@h".to_string()));
     }
 

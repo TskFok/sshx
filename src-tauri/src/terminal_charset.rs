@@ -3,6 +3,8 @@
 //! 本机 `ssh` 进程保持 `LC_ALL=C`，主机校验日志语言不变。macOS 系统配置会把
 //! `LANG` / `LC_*` 转发给远端，因此交互会话再用 `SetEnv` 覆盖成用户选择的字符集。
 //! OpenSSH 先发送 `SendEnv`，再发送 `SetEnv`，后写的值生效。
+//! OpenSSH 只采用第一条 `SetEnv`，后续 `-o SetEnv=...` 会被忽略，
+//! 因此所有变量必须写在同一条里。
 
 use encoding_rs::{CoderResult, Decoder, Encoder, EncoderResult, Encoding};
 
@@ -36,9 +38,7 @@ pub fn remote_locale(charset: &str) -> &'static str {
 pub fn append_openssh_setenv(args: &mut Vec<String>, charset: &str) {
     let locale = remote_locale(charset);
     args.push("-o".to_string());
-    args.push(format!("SetEnv=LANG={locale}"));
-    args.push("-o".to_string());
-    args.push(format!("SetEnv=LC_ALL={locale}"));
+    args.push(format!("SetEnv=LANG={locale} LC_ALL={locale}"));
 }
 
 fn encoding_for(charset: &str) -> Option<&'static Encoding> {
@@ -186,12 +186,7 @@ mod tests {
         append_openssh_setenv(&mut args, "utf-8");
         assert_eq!(
             args,
-            vec![
-                "-o",
-                "SetEnv=LANG=en_US.UTF-8",
-                "-o",
-                "SetEnv=LC_ALL=en_US.UTF-8",
-            ]
+            vec!["-o", "SetEnv=LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8"]
         );
     }
 
