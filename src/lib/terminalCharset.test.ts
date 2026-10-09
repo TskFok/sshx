@@ -10,5 +10,9 @@ describe("终端字符集", () => {
     expect(normalizeTerminalCharset("gb-2312")).toBe("gb2312");
     expect(normalizeTerminalCharset("GB18030")).toBe("gb18030");
     expect(normalizeTerminalCharset("Big5")).toBe("big5");
+    expect(normalizeTerminalCharset("utf_8")).toBe("utf-8");
+    expect(normalizeTerminalCharset("gb_2312")).toBe("gb2312");
+    expect(normalizeTerminalCharset("gb_18030")).toBe("gb18030");
+    expect(normalizeTerminalCharset("big_5")).toBe("big5");
   });
 });

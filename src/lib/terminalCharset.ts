@@ -9,7 +9,7 @@ export const TERMINAL_CHARSETS = [
 ] as const;
 
 export function normalizeTerminalCharset(value: string | null | undefined): string {
-  const compact = (value ?? "").trim().toLowerCase().replace(/\s+/g, "").replaceAll("_", "-");
+  const compact = (value ?? "").trim().toLowerCase().replace(/\s+/g, "").replace(/_/g, "-");
   if (compact === "utf8" || compact === "utf-8") return "utf-8";
   if (compact === "gb-2312") return "gb2312";
   if (compact === "gb-18030") return "gb18030";
