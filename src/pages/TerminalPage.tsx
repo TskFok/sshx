@@ -45,6 +45,12 @@ import {
 import { loadConnectionCatalog } from "@/lib/connectionCatalog";
 import { groupConnectionsForDisplay } from "@/lib/connectionGroups";
 import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  fontSizeAfterZoom,
+  resolveTerminalAppearance,
+  type TerminalCursorStyle,
+} from "@/lib/terminalAppearance";
+import {
   clampTerminalScrollbackLines,
   DEFAULT_TERMINAL_SCROLLBACK_LINES,
 } from "@/lib/terminalConfig";
@@ -127,9 +133,6 @@ interface RemoteDirSnapshot {
   entries: RemoteFileEntry[];
 }
 
-const DEFAULT_FONT_SIZE = 14;
-const MIN_FONT_SIZE = 8;
-const MAX_FONT_SIZE = 32;
 const ZOOM_KEYS = new Set(["=", "+", "-", "0"]);
 
 let tabIdCounter = 0;
@@ -206,7 +209,8 @@ export function TerminalPage() {
   const [terminals, setTerminals] = useState<TerminalInstance[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [fontSize, setFontSize] = useState(DEFAULT_TERMINAL_FONT_SIZE);
+  const [baseFontSize, setBaseFontSize] = useState(DEFAULT_TERMINAL_FONT_SIZE);
   const [terminalColorScheme, setTerminalColorScheme] = useState(
     DEFAULT_TERMINAL_COLOR_SCHEME_ID
   );
@@ -276,9 +280,12 @@ export function TerminalPage() {
   const terminalDynamicWallpaperOpacityRef = useRef(
     DEFAULT_TERMINAL_WALLPAPER_OPACITY
   );
-  const fontSizeRef = useRef(DEFAULT_FONT_SIZE);
+  const fontSizeRef = useRef(DEFAULT_TERMINAL_FONT_SIZE);
+  const baseFontSizeRef = useRef(DEFAULT_TERMINAL_FONT_SIZE);
+  const cursorStyleRef = useRef<TerminalCursorStyle | null>(null);
   const zoomHintTimer = useRef<ReturnType<typeof setTimeout>>();
   fontSizeRef.current = fontSize;
+  baseFontSizeRef.current = baseFontSize;
   terminalColorSchemeRef.current = terminalColorScheme;
   terminalDynamicThemeJsonRef.current = terminalDynamicThemeJson;
   terminalDynamicWallpaperPathRef.current = terminalDynamicWallpaperPath;
@@ -316,6 +323,24 @@ export function TerminalPage() {
       setTerminalDynamicThemeJson(dynJson);
       setTerminalDynamicWallpaperPath(path);
       setTerminalDynamicWallpaperOpacity(op);
+      const appearance = resolveTerminalAppearance(
+        {
+          fontSize: fontSizeRef.current,
+          fontSizeBase: baseFontSizeRef.current,
+          savedCursorStyle: cursorStyleRef.current,
+        },
+        {
+          fontSize: s.fontSize,
+          terminalCursorStyle: s.terminalCursorStyle,
+        }
+      );
+      cursorStyleRef.current = appearance.savedCursorStyle;
+      if (appearance.applyFontSize) {
+        baseFontSizeRef.current = appearance.fontSizeBase;
+        fontSizeRef.current = appearance.fontSize;
+        setBaseFontSize(appearance.fontSizeBase);
+        setFontSize(appearance.fontSize);
+      }
       const resolved = resolveTerminalColorTheme(
         scheme,
         parseTerminalThemeJson(dynJson)
@@ -331,6 +356,9 @@ export function TerminalPage() {
           t.terminal.options.scrollback = scroll;
           t.terminal.options.allowTransparency = allowTransparency;
           t.terminal.options.theme = theme;
+          if (appearance.applyCursorStyle) {
+            t.terminal.options.cursorStyle = appearance.savedCursorStyle;
+          }
         }
         return [...prev];
       });
@@ -429,12 +457,13 @@ export function TerminalPage() {
       if (!isVisible) return;
       if ((e.metaKey || e.ctrlKey) && ZOOM_KEYS.has(e.key)) {
         e.preventDefault();
+        const zoomBase = baseFontSizeRef.current;
         if (e.key === "=" || e.key === "+") {
-          setFontSize((prev) => Math.min(prev + 1, MAX_FONT_SIZE));
+          setFontSize((prev) => fontSizeAfterZoom("in", prev, zoomBase));
         } else if (e.key === "-") {
-          setFontSize((prev) => Math.max(prev - 1, MIN_FONT_SIZE));
+          setFontSize((prev) => fontSizeAfterZoom("out", prev, zoomBase));
         } else if (e.key === "0") {
-          setFontSize(DEFAULT_FONT_SIZE);
+          setFontSize(fontSizeAfterZoom("reset", fontSizeRef.current, zoomBase));
         }
       }
     };
@@ -636,6 +665,7 @@ export function TerminalPage() {
           cursorBlink: true,
           fontSize: fontSizeRef.current,
           fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+          cursorStyle: cursorStyleRef.current ?? "block",
           scrollback: terminalScrollbackRef.current,
           theme,
           allowTransparency,
@@ -706,7 +736,13 @@ export function TerminalPage() {
           }
         });
 
-        setTerminals((prev) => [...prev, inst]);
+        setTerminals((prev) => {
+          const cursor = cursorStyleRef.current;
+          if (cursor) {
+            inst.terminal.options.cursorStyle = cursor;
+          }
+          return [...prev, inst];
+        });
         setActiveTab(inst.id);
         setShowPicker(false);
 
@@ -1188,9 +1224,9 @@ export function TerminalPage() {
             }}
           />
         </div>
-        {showZoomHint && fontSize !== DEFAULT_FONT_SIZE && (
+        {showZoomHint && fontSize !== baseFontSize && (
           <div className="absolute bottom-4 right-4 z-20 rounded-lg border bg-background/80 px-3 py-1.5 text-xs shadow-lg backdrop-blur">
-            {fontSize}px ({Math.round((fontSize / DEFAULT_FONT_SIZE) * 100)}%)
+            {fontSize}px ({Math.round((fontSize / baseFontSize) * 100)}%)
             <span className="ml-2 text-muted-foreground">⌘0 重置</span>
           </div>
         )}
