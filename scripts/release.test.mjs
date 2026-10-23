@@ -3,7 +3,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import postcss from "postcss";
+import tailwindcss from "tailwindcss";
 import { describe, expect, it } from "vitest";
+import tailwindConfig from "../tailwind.config.ts";
 import {
   getConsistentVersion,
   parseReleaseArgs,
@@ -43,13 +46,28 @@ describe("依赖兼容性", () => {
     expect(overrides).toEqual([">=4.28.7 <5.0.0"]);
   });
 
-  it("将 postcss-selector-parser 安全覆盖限制在修补后的 6.x", () => {
-    const workspace = readFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "utf8");
-    const overrides = [
-      ...workspace.matchAll(/^\s*postcss-selector-parser@[^:]+:\s*'([^']+)'$/gm),
-    ].map(([, version]) => version);
+  it("安全升级后仍生成项目使用的分组、同级和属性变体样式", async () => {
+    const result = await postcss([
+      tailwindcss({
+        ...tailwindConfig,
+        content: [{
+          raw: "group-hover:opacity-100 peer-disabled:cursor-not-allowed data-[state=active]:bg-background data-[state=open]:animate-in",
+        }],
+      }),
+    ]).process("@tailwind utilities;", { from: undefined });
+    const declarations = [];
+    result.root.walkRules((rule) => {
+      rule.walkDecls((declaration) => {
+        declarations.push([rule.selector, declaration.prop, declaration.value]);
+      });
+    });
 
-    expect(overrides).toEqual([">=6.1.3 <7.0.0"]);
+    expect(declarations).toEqual(expect.arrayContaining([
+      [".group:hover .group-hover\\:opacity-100", "opacity", "1"],
+      [".peer:disabled ~ .peer-disabled\\:cursor-not-allowed", "cursor", "not-allowed"],
+      [".data-\\[state\\=active\\]\\:bg-background[data-state=\"active\"]", "background-color", "hsl(var(--background))"],
+      [".data-\\[state\\=open\\]\\:animate-in[data-state=\"open\"]", "animation-name", "enter"],
+    ]));
   });
 });
 

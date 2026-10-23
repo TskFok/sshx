@@ -28,7 +28,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@xterm/addon-fit": "^0.10.0",
@@ -44,7 +44,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.10.1",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^22.19.19",
     "@types/react": "^18.3.30",
     "@types/react-dom": "^18.3.7",
@@ -57,7 +57,7 @@
     "tailwindcss": "^3.4.19",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.9.3",
-    "vite": "^8.0.16",
-    "vitest": "^4.1.11"
+    "vite": "^8.1.6",
+    "vitest": "^4.1.12"
   }
 }

@@ -4,17 +4,17 @@ version = "1.3.3"
 description = "Cross-platform SSH Connection Manager"
 authors = ["sshx"]
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.90"
 
 [lib]
 name = "sshx_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.0", features = ["protocol-asset"] }
+tauri = { version = "2.12.5", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-window-state = "2"

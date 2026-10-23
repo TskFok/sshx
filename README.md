@@ -49,9 +49,9 @@
 
 ### 环境要求
 
-- Node.js >= 18
-- pnpm >= 8
-- Rust >= 1.88（建议 stable 最新版）
+- Node.js >= 22.12（推荐 22 LTS，与 CI 保持一致）
+- pnpm 10.28.2（与 `packageManager` 保持一致）
+- Rust >= 1.90（建议 stable 最新版）
 - Tauri 依赖环境（见 [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/)）
 
 ### 安装与运行
