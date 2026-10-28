@@ -214,8 +214,16 @@ impl russh::client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // 现有 known_hosts 验证只支持普通主机公钥，不能将证书降为裸公钥后信任。
+        let russh::keys::PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_public_key
+        else {
+            return Ok(false);
+        };
         if let Some(app) = &self.host_key_prompt_app {
             super::host_key::verify_or_confirm_server_key(
                 app,
@@ -274,6 +282,47 @@ mod tests {
         cBcRml0fczzbj0QzvB02AAAAInVzaG9wYWxAeWFuZ3lpLWRlTWFjQm9vay1Qcm8ubG9jYW\n\
         wBAgM=\n\
         -----END OPENSSH PRIVATE KEY-----";
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn server_key_callback_rejects_certificates_without_trusting_the_embedded_key() {
+        use russh::client::Handler;
+        use russh::keys::ssh_key::certificate::{Builder, CertType};
+
+        let key = decode_secret_key(ED25519_KEY, None).unwrap();
+        let mut builder = Builder::new(
+            vec![0; 32],
+            key.public_key().key_data().clone(),
+            0,
+            u64::MAX,
+        )
+        .unwrap();
+        builder.cert_type(CertType::Host).unwrap();
+        builder.valid_principal("known.example").unwrap();
+        let certificate = builder.sign(&key).unwrap();
+        let mut handler = ClientHandler::new("known.example".into(), 22);
+
+        assert!(!handler
+            .check_server_key(&russh::keys::PublicKeyOrCertificate::Certificate(
+                certificate
+            ))
+            .await
+            .unwrap());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn server_key_callback_still_applies_known_hosts_validation_to_plain_keys() {
+        use russh::client::Handler;
+
+        let key = decode_secret_key(ED25519_KEY, None).unwrap();
+        let mut handler = ClientHandler::new("invalid host".into(), 22);
+        let error = handler
+            .check_server_key(&key.public_key().clone().into())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("SSH 主机名无效"));
+    }
 
     #[cfg(not(target_os = "macos"))]
     #[test]

@@ -1,4 +1,4 @@
-//! 回归：非 macOS 使用 crates.io russh >= 0.60.3（含 CryptoVec / agent 帧长度修复）。
+//! 回归：非 macOS 使用 crates.io russh >= 0.65.0（含 EXT_INFO / 通道写入安全修复）。
 
 #![cfg(not(target_os = "macos"))]
 
@@ -8,8 +8,8 @@ fn russh_dep_from_crates_io_not_vendored() {
     let s = std::fs::read_to_string(manifest_path)
         .unwrap_or_else(|e| panic!("read {manifest_path}: {e}"));
     assert!(
-        s.contains("russh = \"0.60\""),
-        "Cargo.toml 应声明 russh = \"0.60\" 以获取 >=0.60.3 安全补丁"
+        s.contains("russh = \"0.65\""),
+        "Cargo.toml 应声明 russh = \"0.65\" 以获取 >=0.65.0 安全补丁"
     );
     assert!(
         !s.contains("../vendor/russh"),
@@ -18,7 +18,7 @@ fn russh_dep_from_crates_io_not_vendored() {
 }
 
 #[test]
-fn lockfile_russh_at_least_0_60_3() {
+fn lockfile_russh_at_least_0_65_0() {
     let lock_path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock");
     let s = std::fs::read_to_string(lock_path).unwrap_or_else(|e| panic!("read {lock_path}: {e}"));
     let version = s
@@ -36,9 +36,9 @@ fn lockfile_russh_at_least_0_60_3() {
         parts.len() >= 3,
         "无法解析 russh 版本: {version}"
     );
-    let (major, minor, patch) = (parts[0], parts[1], parts[2]);
+    let (major, minor) = (parts[0], parts[1]);
     assert!(
-        major > 0 || minor > 60 || (minor == 60 && patch >= 3),
-        "russh 版本 {version} 低于安全修复版本 0.60.3"
+        major > 0 || minor >= 65,
+        "russh 版本 {version} 低于安全修复版本 0.65.0"
     );
 }
