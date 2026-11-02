@@ -230,12 +230,15 @@ impl russh::client::Handler for ClientHandler {
                 &self.host,
                 self.port,
                 server_public_key,
-                None,
                 &self.host_key_cancellation,
             )
             .await
         } else {
-            super::host_key::verify_server_key(&self.host, self.port, server_public_key, None)
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "未配置 SSHX 主机密钥缓存，已拒绝连接。",
+            )
+            .into())
         }
     }
 }
@@ -312,16 +315,16 @@ mod tests {
 
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
-    async fn server_key_callback_still_applies_known_hosts_validation_to_plain_keys() {
+    async fn server_key_callback_rejects_plain_keys_without_app_trust_store() {
         use russh::client::Handler;
 
         let key = decode_secret_key(ED25519_KEY, None).unwrap();
-        let mut handler = ClientHandler::new("invalid host".into(), 22);
+        let mut handler = ClientHandler::new("known.example".into(), 22);
         let error = handler
             .check_server_key(&key.public_key().clone().into())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("SSH 主机名无效"));
+        assert!(error.to_string().contains("未配置 SSHX 主机密钥缓存"));
     }
 
     #[cfg(not(target_os = "macos"))]

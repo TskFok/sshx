@@ -2,7 +2,7 @@ use super::host_key_prompt::cancellation::HostKeyCancellation;
 use hmac::{Hmac, Mac};
 use russh::keys::ssh_key::known_hosts::{Entry, HostPatterns, Marker};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 // 锁只覆盖读、复核和落盘，不跨用户确认的 await。
@@ -19,13 +19,12 @@ pub(crate) fn verify_server_key(
     host: &str,
     port: u16,
     key: &russh::keys::PublicKey,
-    known_hosts_path: Option<&Path>,
+    path: &Path,
 ) -> Result<bool, russh::Error> {
-    let path = resolve_known_hosts_path(known_hosts_path)?;
-    match classify_server_key(host, port, key, &path, false)? {
+    match classify_server_key(host, port, key, path, false)? {
         HostKeyStatus::Trusted => Ok(true),
         HostKeyStatus::Unknown => Err(host_key_error(
-            "SSH 主机密钥未受信任，已拒绝连接。请独立核验服务器指纹后保存到 ~/.ssh/known_hosts。",
+            "SSH 主机密钥未受信任，已拒绝连接。请在 SSHX 中独立核验并确认服务器指纹。",
         )),
     }
 }
@@ -36,10 +35,12 @@ pub(crate) async fn verify_or_confirm_server_key(
     host: &str,
     port: u16,
     key: &russh::keys::PublicKey,
-    known_hosts_path: Option<&Path>,
     cancellation: &HostKeyCancellation,
 ) -> Result<bool, russh::Error> {
-    let path = resolve_known_hosts_path(known_hosts_path)?;
+    let path = super::known_hosts::app_known_hosts_path(app)
+        .map_err(|message| host_key_error(&message))?;
+    super::known_hosts::ensure_known_hosts_file(&path)
+        .map_err(|message| host_key_error(&message))?;
     if classify_server_key(host, port, key, &path, true)? == HostKeyStatus::Trusted {
         return Ok(true);
     }
@@ -55,31 +56,10 @@ pub(crate) async fn verify_or_confirm_server_key(
         ))
         .await
         .map_err(|message| host_key_error(&message))?;
+    let _cache_guard = super::known_hosts::KNOWN_HOSTS_LOCK.lock().await;
     cancellation
         .with_active(|| save_confirmed_key(host, port, key, &path))
         .map_err(|message| host_key_error(&message))?
-}
-
-fn resolve_known_hosts_path(path: Option<&Path>) -> Result<PathBuf, russh::Error> {
-    match path {
-        Some(path) => Ok(path.to_path_buf()),
-        None => std::env::home_dir()
-            .map(|home| home.join(".ssh").join("known_hosts"))
-            .ok_or_else(|| host_key_error("无法确定用户目录，已拒绝 SSH 主机密钥验证。")),
-    }
-}
-
-fn validate_host(host: &str) -> Result<(), russh::Error> {
-    if host.is_empty()
-        || host
-            .chars()
-            .any(|ch| ch.is_whitespace() || ch.is_control() || "*,?!|[]#\\/".contains(ch))
-    {
-        return Err(host_key_error(
-            "SSH 主机名无效，无法安全保存 known_hosts 记录。",
-        ));
-    }
-    Ok(())
 }
 
 fn classify_server_key(
@@ -89,7 +69,8 @@ fn classify_server_key(
     path: &Path,
     allow_missing: bool,
 ) -> Result<HostKeyStatus, russh::Error> {
-    validate_host(host)?;
+    let canonical_target = super::known_hosts::host_key_target(host, port)
+        .map_err(|message| host_key_error(&message))?;
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
@@ -151,7 +132,6 @@ fn classify_server_key(
     } else {
         format!("[{host}]:{port}")
     };
-    let canonical_target = target.to_ascii_lowercase();
     let mut target_known = false;
     let mut trusted = false;
     for entry in entries {
@@ -235,37 +215,19 @@ fn save_confirmed_key(
     key: &russh::keys::PublicKey,
     path: &Path,
 ) -> Result<bool, russh::Error> {
+    let target = super::known_hosts::host_key_target(host, port)
+        .map_err(|message| host_key_error(&message))?;
     let _write_guard = KNOWN_HOSTS_WRITE_LOCK
         .lock()
         .map_err(|_| host_key_error("主机密钥保存状态不可用，已拒绝连接。"))?;
+    // 用户确认期间缓存路径可能被替换，落盘前仍须拒绝符号链接和目录。
+    super::known_hosts::ensure_known_hosts_file(path)
+        .map_err(|message| host_key_error(&message))?;
     // 等待期间可能已有其他连接保存密钥：相同则复用，冲突、撤销或格式错误一律拒绝。
     if classify_server_key(host, port, key, path, true)? == HostKeyStatus::Trusted {
         return Ok(true);
     }
-    if let Some(parent) = path.parent() {
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(parent)?;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.append(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    let canonical_host = host.to_ascii_lowercase();
-    let target = if port == 22 {
-        canonical_host
-    } else {
-        format!("[{canonical_host}]:{port}")
-    };
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
     let record = format!(
         "\n{target} {}\n",
         key.to_openssh()
@@ -273,7 +235,7 @@ fn save_confirmed_key(
     );
     file.write_all(record.as_bytes())?;
     file.sync_data()?;
-    verify_server_key(host, port, key, Some(path))
+    verify_server_key(host, port, key, path)
 }
 
 fn host_key_error(message: &str) -> russh::Error {
@@ -304,7 +266,7 @@ mod tests {
                 host,
                 port,
                 &russh::keys::parse_public_key_base64(key).unwrap(),
-                Some(&self.0),
+                &self.0,
             )
         }
     }
@@ -320,11 +282,7 @@ mod tests {
         let fixture = KnownHostsFixture::new(&format!("known.example ssh-ed25519 {KEY}\n"));
         let original = std::fs::read(&fixture.0).unwrap();
         assert!(fixture.verify("known.example", 22, KEY).unwrap());
-        let unknown = fixture
-            .verify("unknown.example", 22, KEY)
-            .unwrap_err()
-            .to_string();
-        assert!(unknown.contains("known_hosts"));
+        assert!(fixture.verify("unknown.example", 22, KEY).is_err());
         assert!(fixture.verify("known.example", 22, OTHER_KEY).is_err());
         assert_eq!(std::fs::read(&fixture.0).unwrap(), original);
     }
@@ -440,6 +398,69 @@ mod tests {
             std::fs::read_to_string(&fixture.0).unwrap().trim(),
             format!("[new.example]:2222 ssh-ed25519 {KEY}")
         );
+    }
+
+    #[tokio::test]
+    async fn app_cache_save_and_clear_preserve_other_targets_and_separate_files() {
+        let original = format!(
+            "# existing app cache\nnew.example ssh-ed25519 {OTHER_KEY}\nother.example ssh-ed25519 {OTHER_KEY}\n"
+        );
+        let fixture = KnownHostsFixture::new(&original);
+        let separate = KnownHostsFixture::new(&format!("new.example ssh-ed25519 {KEY}\n"));
+        let separate_original = std::fs::read(&separate.0).unwrap();
+        let key = russh::keys::parse_public_key_base64(KEY).unwrap();
+        let _cache_guard = super::super::known_hosts::KNOWN_HOSTS_LOCK.lock().await;
+
+        assert!(save_confirmed_key("new.example", 2222, &key, &fixture.0).unwrap());
+        assert!(fixture.verify("new.example", 2222, KEY).unwrap());
+        assert!(fixture.verify("new.example", 22, OTHER_KEY).unwrap());
+        assert!(fixture.verify("other.example", 22, OTHER_KEY).unwrap());
+        assert!(std::fs::read_to_string(&fixture.0)
+            .unwrap()
+            .starts_with(&original));
+        assert_eq!(std::fs::read(&separate.0).unwrap(), separate_original);
+
+        assert_eq!(
+            super::super::known_hosts::clear_host_keys(&fixture.0, "new.example", 2222).unwrap(),
+            1
+        );
+        assert_eq!(
+            classify_server_key("new.example", 2222, &key, &fixture.0, true).unwrap(),
+            HostKeyStatus::Unknown
+        );
+        assert!(fixture.verify("new.example", 2222, KEY).is_err());
+        assert!(fixture.verify("new.example", 22, OTHER_KEY).unwrap());
+        assert!(fixture.verify("other.example", 22, OTHER_KEY).unwrap());
+        assert_eq!(std::fs::read(&separate.0).unwrap(), separate_original);
+    }
+
+    #[test]
+    fn zero_port_is_rejected_before_classification_or_saving() {
+        let original = format!("[known.example]:0 ssh-ed25519 {KEY}\n");
+        let fixture = KnownHostsFixture::new(&original);
+        let key = russh::keys::parse_public_key_base64(KEY).unwrap();
+        assert!(classify_server_key("known.example", 0, &key, &fixture.0, true).is_err());
+        assert!(save_confirmed_key("new.example", 0, &key, &fixture.0).is_err());
+        assert_eq!(std::fs::read_to_string(&fixture.0).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confirmation_rejects_cache_symlinks_without_trusting_or_modifying_the_target() {
+        for host in ["new.example", "known.example"] {
+            let original = format!("known.example ssh-ed25519 {KEY}\n");
+            let fixture = KnownHostsFixture::new(&original);
+            let app_path = fixture.0.parent().unwrap().join("app_known_hosts");
+            std::os::unix::fs::symlink(&fixture.0, &app_path).unwrap();
+            let key = russh::keys::parse_public_key_base64(KEY).unwrap();
+
+            assert!(save_confirmed_key(host, 22, &key, &app_path).is_err());
+            assert_eq!(std::fs::read_to_string(&fixture.0).unwrap(), original);
+            assert!(std::fs::symlink_metadata(&app_path)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
     }
 
     #[test]

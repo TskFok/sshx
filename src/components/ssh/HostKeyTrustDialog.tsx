@@ -43,6 +43,7 @@ export function HostKeyTrustContent({
         <DialogTitle>首次连接：确认 SSH 主机密钥</DialogTitle>
         <DialogDescription>
           此主机的密钥尚未保存。请通过独立渠道向管理员核验下方 SHA256 指纹；仅凭当前连接显示的信息无法确认主机身份。
+          确认后，密钥将保存到 SSHX 自己的 known_hosts 中。
         </DialogDescription>
       </DialogHeader>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-md border bg-muted/30 p-4 text-sm">

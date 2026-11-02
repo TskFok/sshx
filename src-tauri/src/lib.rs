@@ -61,6 +61,7 @@ pub fn run() {
             ssh_commands::ssh_auth_cancel,
             host_key_commands::ssh_host_key_pending,
             host_key_commands::ssh_host_key_respond,
+            host_key_commands::ssh_host_key_clear,
             ssh_commands::test_connection,
             sftp_commands::sftp_get_remote_pwd,
             sftp_commands::sftp_list_remote_dir,

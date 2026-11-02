@@ -8,6 +8,7 @@ use crate::ssh::auth::AuthMethod;
 use crate::ssh::prompt::{AuthPromptManager, AuthPromptPayload, PromptItem};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
@@ -529,6 +530,8 @@ pub async fn connect_openssh(
     output_flow_control: bool,
     terminal_charset: &str,
 ) -> Result<SshSession, String> {
+    let known_hosts_path = crate::ssh::known_hosts::app_known_hosts_path(&app)?;
+    crate::ssh::known_hosts::ensure_known_hosts_file(&known_hosts_path)?;
     let log_path = temp_log_path()?;
     record_event(
         Some(&app),
@@ -539,9 +542,9 @@ pub async fn connect_openssh(
     let control_path = compact_control_socket_path();
 
     let (mut sftp_prefix_args, sftp_destination) =
-        build_sftp_slave_prefix(&control_path, port, username, host, auth)?;
+        build_sftp_slave_prefix(&control_path, port, username, host, auth, &known_hosts_path)?;
     let (mut ssh_mux_prefix_args, _) =
-        build_ssh_slave_prefix(&control_path, port, username, host, auth)?;
+        build_ssh_slave_prefix(&control_path, port, username, host, auth, &known_hosts_path)?;
 
     let ssh_args = build_ssh_args(
         host,
@@ -554,6 +557,7 @@ pub async fn connect_openssh(
         None,
         Some(&control_path),
         terminal_charset,
+        &known_hosts_path,
     )?;
 
     let AuthenticatedPty {
@@ -702,6 +706,8 @@ pub async fn connect_openssh_test(
     keepalive_interval_secs: u32,
     keepalive_max: u32,
 ) -> Result<String, String> {
+    let known_hosts_path = crate::ssh::known_hosts::app_known_hosts_path(&app)?;
+    crate::ssh::known_hosts::ensure_known_hosts_file(&known_hosts_path)?;
     let log_path = temp_log_path()?;
     record_event(
         Some(&app),
@@ -720,6 +726,7 @@ pub async fn connect_openssh_test(
         Some("true"),
         None,
         "utf-8",
+        &known_hosts_path,
     )?;
 
     let authenticated = authenticate_pty_with_host_trust(
@@ -1265,8 +1272,10 @@ fn build_sftp_slave_prefix(
     username: &str,
     host: &str,
     auth: &AuthMethod,
+    known_hosts_path: &Path,
 ) -> Result<(Vec<String>, String), String> {
-    let mut args = vec![
+    let mut args = super::openssh_host_key::app_host_key_options(known_hosts_path, host, port)?;
+    args.extend([
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
@@ -1277,7 +1286,7 @@ fn build_sftp_slave_prefix(
         "StrictHostKeyChecking=yes".to_string(),
         "-o".to_string(),
         "HostKeyAlgorithms=+ssh-rsa".to_string(),
-    ];
+    ]);
     args.push("-P".to_string());
     args.push(port.to_string());
     match auth {
@@ -1306,8 +1315,10 @@ fn build_ssh_slave_prefix(
     username: &str,
     host: &str,
     auth: &AuthMethod,
+    known_hosts_path: &Path,
 ) -> Result<(Vec<String>, String), String> {
-    let mut args = vec![
+    let mut args = super::openssh_host_key::app_host_key_options(known_hosts_path, host, port)?;
+    args.extend([
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
@@ -1318,7 +1329,7 @@ fn build_ssh_slave_prefix(
         "StrictHostKeyChecking=yes".to_string(),
         "-o".to_string(),
         "HostKeyAlgorithms=+ssh-rsa".to_string(),
-    ];
+    ]);
     args.push("-p".to_string());
     args.push(port.to_string());
     match auth {
@@ -1340,7 +1351,7 @@ fn build_ssh_slave_prefix(
     Ok((args, format!("{username}@{host}")))
 }
 
-fn build_ssh_args(
+pub(super) fn build_ssh_args(
     host: &str,
     port: u16,
     username: &str,
@@ -1351,9 +1362,11 @@ fn build_ssh_args(
     remote_command: Option<&str>,
     control_socket: Option<&str>,
     terminal_charset: &str,
+    known_hosts_path: &Path,
 ) -> Result<Vec<String>, String> {
     // DEBUG3 记录 OpenSSH 原生主机查找结果，供首次信任流程区分完全未知与已有记录。
-    let mut args = vec![
+    let mut args = super::openssh_host_key::app_host_key_options(known_hosts_path, host, port)?;
+    args.extend([
         "-o".to_string(),
         "StrictHostKeyChecking=yes".to_string(),
         "-E".to_string(),
@@ -1365,7 +1378,7 @@ fn build_ssh_args(
         // 保证主机验证日志不受用户 LogLevel 配置影响。
         "-vvv".to_string(),
         "-tt".to_string(),
-    ];
+    ]);
 
     // JumpServer / Go crypto.ssh 常见仅提供 ssh-rsa **主机**密钥；OpenSSH 9+ 默认不再协商该 host key，
     // 会在 KEX 阶段报 “no matching host key type / Their offer: ssh-rsa”，与「用户公钥算法」无关。
@@ -1379,6 +1392,16 @@ fn build_ssh_args(
         args.push("ControlPersist=no".to_string());
         args.push("-o".to_string());
         args.push(format!("ControlPath={sock}"));
+    } else {
+        // 测试连接必须重新校验应用缓存，不能复用系统配置中的既有会话。
+        args.extend([
+            "-o".into(),
+            "ControlPath=none".into(),
+            "-o".into(),
+            "ControlMaster=no".into(),
+            "-o".into(),
+            "ControlPersist=no".into(),
+        ]);
     }
 
     if keepalive_interval_secs > 0 {
@@ -1834,7 +1857,7 @@ fn scan_fatal_disconnect(s: &str) -> Option<String> {
         || s.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
         || s.contains("you have requested strict checking")
     {
-        return Some("SSH 主机密钥未受信任或已变更，已拒绝连接。请先在系统终端使用 ssh 连接相同主机和端口，向服务器管理员独立核验指纹后再保存到 known_hosts；不要忽略密钥变更警告。".to_string());
+        return Some("SSH 主机密钥未受信任或已变更，已拒绝连接。首次连接请在应用内核验指纹；密钥变更时请向服务器管理员独立核验，再从连接编辑页清除主机密钥缓存后重新连接。".to_string());
     }
     if s.contains("no matching host key type") {
         return Some(
@@ -2284,20 +2307,35 @@ mod tests {
                     None,
                     None,
                     "utf-8",
+                    Path::new("/tmp/sshx-test-known hosts"),
                 )
                 .unwrap(),
                 "-p",
             ),
             (
-                build_ssh_slave_prefix("/tmp/test.sock", 22, "user", "example.test", &auth)
-                    .unwrap()
-                    .0,
+                build_ssh_slave_prefix(
+                    "/tmp/test.sock",
+                    22,
+                    "user",
+                    "example.test",
+                    &auth,
+                    Path::new("/tmp/sshx-test-known hosts"),
+                )
+                .unwrap()
+                .0,
                 "-p",
             ),
             (
-                build_sftp_slave_prefix("/tmp/test.sock", 22, "user", "example.test", &auth)
-                    .unwrap()
-                    .0,
+                build_sftp_slave_prefix(
+                    "/tmp/test.sock",
+                    22,
+                    "user",
+                    "example.test",
+                    &auth,
+                    Path::new("/tmp/sshx-test-known hosts"),
+                )
+                .unwrap()
+                .0,
                 "-P",
             ),
         ];
@@ -2312,6 +2350,9 @@ mod tests {
     #[test]
     fn security_all_openssh_commands_require_verified_host_keys() {
         let auth = AuthMethod::Password("fake-test-password".into());
+        let config_path =
+            std::env::temp_dir().join(format!("sshx-host-config-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&config_path, "Host *\n UserKnownHostsFile /external/user_known_hosts\n GlobalKnownHostsFile /external/global_known_hosts\n KnownHostsCommand /bin/echo external-key\n HostKeyAlias external-alias\n VerifyHostKeyDNS yes\n NoHostAuthenticationForLocalhost yes\n NoHostAuthenticationForProxyCommand yes\n CheckHostIP yes\n HashKnownHosts yes\n UpdateHostKeys yes\n ControlMaster auto\n ControlPath /external/control\n ControlPersist yes\n").unwrap();
         let commands = [
             build_ssh_args(
                 "example.test",
@@ -2324,22 +2365,96 @@ mod tests {
                 None,
                 None,
                 "utf-8",
+                Path::new("/tmp/sshx-test-known hosts"),
             )
             .unwrap(),
-            build_ssh_slave_prefix("/tmp/fake.sock", 2222, "user", "example.test", &auth)
-                .unwrap()
-                .0,
-            build_sftp_slave_prefix("/tmp/fake.sock", 2222, "user", "example.test", &auth)
-                .unwrap()
-                .0,
+            build_ssh_slave_prefix(
+                "/tmp/fake.sock",
+                2222,
+                "user",
+                "example.test",
+                &auth,
+                Path::new("/tmp/sshx-test-known hosts"),
+            )
+            .unwrap()
+            .0,
+            build_sftp_slave_prefix(
+                "/tmp/fake.sock",
+                2222,
+                "user",
+                "example.test",
+                &auth,
+                Path::new("/tmp/sshx-test-known hosts"),
+            )
+            .unwrap()
+            .0,
         ];
-        for args in commands {
+        let effective: Vec<_> = commands
+            .into_iter()
+            .map(|mut args| {
+                // sftp 的 -P 在底层 ssh 中对应 -p。
+                for arg in &mut args {
+                    if arg == "-P" {
+                        *arg = "-p".into();
+                    }
+                }
+                if !args.iter().any(|arg| arg == "user@example.test") {
+                    args.push("user@example.test".into());
+                }
+                let output = std::process::Command::new(SSH_BIN)
+                    .args(["-G", "-F"])
+                    .arg(&config_path)
+                    .args(&args)
+                    .output()
+                    .unwrap();
+                (args, output)
+            })
+            .collect();
+        std::fs::remove_file(config_path).unwrap();
+        for (index, (args, output)) in effective.into_iter().enumerate() {
             assert!(args
                 .windows(2)
                 .any(|pair| pair == ["-o", "StrictHostKeyChecking=yes"]));
-            assert!(!args
+            assert!(args
                 .iter()
                 .any(|arg| arg.starts_with("UserKnownHostsFile=")));
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let configuration = String::from_utf8(output.stdout).unwrap();
+            for expected in [
+                "globalknownhostsfile none",
+                "hostkeyalias [example.test]:2222",
+                "verifyhostkeydns false",
+                "nohostauthenticationforlocalhost no",
+                "nohostauthenticationforproxycommand no",
+                "checkhostip no",
+                "hashknownhosts no",
+                "updatehostkeys false",
+            ] {
+                assert!(
+                    configuration.lines().any(|line| line == expected),
+                    "{expected}: {configuration}"
+                );
+            }
+            assert!(!configuration.contains("/external/"), "{configuration}");
+            assert!(!configuration.contains("external-key"), "{configuration}");
+            if index == 0 {
+                for expected in ["controlmaster false", "controlpersist no"] {
+                    assert!(
+                        configuration.lines().any(|line| line == expected),
+                        "{expected}: {configuration}"
+                    );
+                }
+                assert!(
+                    !configuration
+                        .lines()
+                        .any(|line| line.starts_with("controlpath ") && line != "controlpath none"),
+                    "{configuration}"
+                );
+            }
         }
     }
 
@@ -2365,6 +2480,7 @@ mod tests {
             None,
             None,
             "utf-8",
+            Path::new("/tmp/sshx-test-known hosts"),
         )
         .unwrap();
         assert!(args.contains(&"-p".into()) && args.contains(&"2222".into()));
@@ -2404,6 +2520,7 @@ mod tests {
             None,
             Some("/tmp/sshx-test.sock"),
             "utf-8",
+            Path::new("/tmp/sshx-test-known hosts"),
         )
         .unwrap();
         assert!(args.iter().any(|a| a == "ControlMaster=yes"));
@@ -2427,6 +2544,7 @@ mod tests {
             None,
             None,
             "utf-8",
+            Path::new("/tmp/sshx-test-known hosts"),
         )
         .unwrap();
         assert!(args.contains(&"-i".into()));
@@ -2449,6 +2567,7 @@ mod tests {
             Some("true"),
             None,
             "utf-8",
+            Path::new("/tmp/sshx-test-known hosts"),
         )
         .unwrap();
         assert!(args.contains(&"-i".into()));
@@ -2477,6 +2596,7 @@ mod tests {
             None,
             None,
             "gbk",
+            Path::new("/tmp/sshx-test-known hosts"),
         )
         .unwrap();
         assert!(args

@@ -238,6 +238,7 @@ fn benchmark_session(config: &BenchmarkConfig) -> SshSession {
         &config.username,
         &config.host,
         &auth,
+        &std::env::temp_dir().join("sshx-benchmark-unused-known_hosts"),
     )
     .unwrap();
     let (mut ssh_args, _) = build_ssh_slave_prefix(
@@ -246,6 +247,7 @@ fn benchmark_session(config: &BenchmarkConfig) -> SshSession {
         &config.username,
         &config.host,
         &auth,
+        &std::env::temp_dir().join("sshx-benchmark-unused-known_hosts"),
     )
     .unwrap();
     harden_slave_args(&mut sftp_args);

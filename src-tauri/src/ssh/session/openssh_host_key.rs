@@ -10,10 +10,9 @@ use std::time::Duration;
 const LOG_LIMIT: u64 = 1024 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
-// 参数前九项由本地预期值和 OpenSSH 原生 token 组成，其余 argv 保留原 KnownHostsCommand。
-// 不通过 shell 解释原命令，exec "$@" 保留其参数边界。
+// 仅检查本地批准值与 OpenSSH 原生 token，不输出密钥或调用外部信任命令。
 const PIN_SCRIPT: &str = r#"#!/bin/sh
-[ "$#" -ge 9 ] || exit 1
+[ "$#" -eq 9 ] || exit 1
 [ "$1" = "$6" ] && [ "$2" = "$7" ] || exit 1
 case "$5" in
   ORDER) ;;
@@ -21,10 +20,37 @@ case "$5" in
   ADDRESS) [ "$4" = "$9" ] || exit 1 ;;
   *) exit 1 ;;
 esac
-shift 9
-[ "$#" -eq 0 ] && exit 0
-exec "$@"
+exit 0
 "#;
+
+/// 所有原生 SSH 入口使用同一应用缓存与逻辑目标，覆盖系统配置的信任来源和免验选项。
+pub(super) fn app_host_key_options(
+    known_hosts_path: &Path,
+    host: &str,
+    port: u16,
+) -> Result<Vec<String>, String> {
+    let path = known_hosts_path
+        .to_str()
+        .ok_or("SSHX 主机密钥缓存路径编码无效。")?;
+    let lookup = crate::ssh::known_hosts::host_key_target(host, port)?;
+    let options = [
+        format!("UserKnownHostsFile={}", quote_native_argument(path)?),
+        "GlobalKnownHostsFile=none".into(),
+        "KnownHostsCommand=none".into(),
+        // HostKeyAlias 不展开 token，IPv6 zone 的 % 必须原样保留。
+        format!("HostKeyAlias={}", quote_literal_argument(&lookup)?),
+        "VerifyHostKeyDNS=no".into(),
+        "NoHostAuthenticationForLocalhost=no".into(),
+        "NoHostAuthenticationForProxyCommand=no".into(),
+        "CheckHostIP=no".into(),
+        "HashKnownHosts=no".into(),
+        "UpdateHostKeys=no".into(),
+    ];
+    Ok(options
+        .into_iter()
+        .flat_map(|option| ["-o".into(), option])
+        .collect())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct HostTrustContext {
@@ -32,7 +58,6 @@ pub(super) struct HostTrustContext {
     hostname: String,
     port: u16,
     host_key_alias: Option<String>,
-    known_hosts_command: Option<String>,
 }
 
 fn parse_effective_config(configuration: String) -> Result<HostTrustContext, String> {
@@ -55,14 +80,13 @@ fn parse_effective_config(configuration: String) -> Result<HostTrustContext, Str
     if hostname.is_empty() || hostname.chars().any(char::is_control) || port == 0 {
         return Err("OpenSSH 有效连接目标无效。".into());
     }
-    let host_key_alias = field("hostkeyalias")?.filter(|value| value != "none");
-    let known_hosts_command = field("knownhostscommand")?.filter(|value| value != "none");
+    // 未设置别名时 ssh -G 省略该字段；"none" 也可以是应用中真实的主机名。
+    let host_key_alias = field("hostkeyalias")?;
     Ok(HostTrustContext {
         configuration,
         hostname,
         port,
         host_key_alias,
-        known_hosts_command,
     })
 }
 
@@ -90,7 +114,7 @@ impl HostKeyPin {
     }
 
     fn command(&self) -> Result<String, String> {
-        let mut command = format!(
+        let command = format!(
             "/bin/sh {} {} {} {} {} %I %h %p %H %f",
             quote_native_argument(self.script.to_str().ok_or("主机指纹固定脚本路径无效。")?)?,
             quote_native_argument(&self.context.hostname)?,
@@ -98,41 +122,6 @@ impl HostKeyPin {
             quote_native_argument(&self.lookup)?,
             quote_native_argument(&self.fingerprint)?
         );
-        if let Some(original) = &self.context.known_hosts_command {
-            // 原生 KnownHostsCommand 的 argv[0] 不展开 token；包装后会成为普通参数。
-            // 对包含这类展开的可执行文件路径拒绝包装，避免悄悄改变原命令语义。
-            let mut quoted = None;
-            let mut escaped = false;
-            for c in original.trim_start().chars() {
-                if c == '%' || c == '$' {
-                    return Err(
-                        "KnownHostsCommand 可执行路径含特殊展开，无法安全包装首次信任。".into(),
-                    );
-                }
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                if c == '\\' {
-                    escaped = true;
-                    continue;
-                }
-                if c == '\'' || c == '"' {
-                    if quoted == Some(c) {
-                        quoted = None;
-                    } else if quoted.is_none() {
-                        quoted = Some(c);
-                    }
-                } else if c.is_whitespace() && quoted.is_none() {
-                    break;
-                }
-            }
-            if original.is_empty() || original.contains(['\0', '\n', '\r']) {
-                return Err("KnownHostsCommand 配置格式无法安全包装。".into());
-            }
-            command.push(' ');
-            command.push_str(original);
-        }
         Ok(command)
     }
 
@@ -162,15 +151,17 @@ impl HostKeyPin {
 }
 
 fn quote_native_argument(argument: &str) -> Result<String, String> {
+    // UserKnownHostsFile / KnownHostsCommand 会展开 token，字面 % 必须成对。
+    quote_literal_argument(&argument.replace('%', "%%"))
+}
+
+fn quote_literal_argument(argument: &str) -> Result<String, String> {
     if argument.contains(['\0', '\n', '\r', '$']) {
         return Err("SSH 信任目标或临时路径含不支持的展开字符，已拒绝自动信任。".into());
     }
     Ok(format!(
         "\"{}\"",
-        argument
-            .replace('%', "%%")
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
+        argument.replace('\\', "\\\\").replace('"', "\\\"")
     ))
 }
 
@@ -334,7 +325,8 @@ fn native_candidate(log: &str) -> Result<Candidate, String> {
         .any(|line| line.starts_with("debug1: Server host certificate:"))
     {
         return Err(
-            "当前首次信任流程不支持主机证书，请先通过 OpenSSH 独立核验并配置证书信任。".into(),
+            "当前应用内首次信任流程不支持主机证书，已拒绝连接。请联系服务器管理员核验主机公钥。"
+                .into(),
         );
     }
     let mut candidates = log
@@ -628,6 +620,11 @@ pub(super) async fn confirm_unknown_host(
         &candidate.fingerprint,
     )
     .await?;
+    // 与清缓存及其他保存操作串行；不能在用户查看指纹期间持有锁。
+    let _cache_guard = crate::ssh::known_hosts::KNOWN_HOSTS_LOCK.lock().await;
+    crate::ssh::known_hosts::ensure_known_hosts_file(
+        &crate::ssh::known_hosts::app_known_hosts_path(app)?,
+    )?;
     context.ensure_unchanged(ssh_args).await?;
     let directory = &pin.directory;
     let helper = directory.file("askpass", ASKPASS_SCRIPT.as_bytes(), 0o700)?;
@@ -910,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn pin_rejects_other_target_or_fingerprint_and_preserves_command_argv() {
+    fn pin_rejects_other_target_or_fingerprint_without_external_commands() {
         let directory = PrivateDirectory::new().unwrap();
         let helper = directory.file("pin", PIN_SCRIPT.as_bytes(), 0o700).unwrap();
         let run = |host: &str, port: &str, lookup: &str, fingerprint: &str| {
@@ -925,9 +922,6 @@ mod tests {
                     port,
                     lookup,
                     fingerprint,
-                    "/usr/bin/printf",
-                    "%s",
-                    "preserved;$(not-a-command)",
                 ])
                 .output()
                 .unwrap()
@@ -943,7 +937,60 @@ mod tests {
         }
         let result = run("example.com", "2222", "alias", FP);
         assert!(result.status.success());
-        assert_eq!(result.stdout, b"preserved;$(not-a-command)");
+        assert!(result.stdout.is_empty());
+        let extra = std::process::Command::new(&helper)
+            .args([
+                "example.com",
+                "2222",
+                "alias",
+                FP,
+                "HOSTNAME",
+                "example.com",
+                "2222",
+                "alias",
+                FP,
+                "/bin/echo",
+                "untrusted-key",
+            ])
+            .output()
+            .unwrap();
+        assert!(!extra.status.success());
+        assert!(extra.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn literal_none_alias_remains_bound_to_the_app_cache_target() {
+        let mut args = app_host_key_options(Path::new("/tmp/app known_hosts"), "none", 22).unwrap();
+        args.extend([
+            "-F".into(),
+            "/dev/null".into(),
+            "-o".into(),
+            "HostName=actual.example".into(),
+            "-p".into(),
+            "22".into(),
+            "user@none".into(),
+        ]);
+        let context = capture_context(&args).await.unwrap();
+        let log = unknown_log().replace("example.com", "none");
+        assert_eq!(unknown_lookup(&log, &context).unwrap(), "none");
+    }
+
+    #[tokio::test]
+    async fn security_ipv6_zone_uses_same_alias_as_cache() {
+        let mut args =
+            app_host_key_options(Path::new("/tmp/app known_hosts"), "fe80::1%en0", 2222).unwrap();
+        args.extend([
+            "-F".into(),
+            "/dev/null".into(),
+            "-p".into(),
+            "2222".into(),
+            "user@fe80::1%en0".into(),
+        ]);
+        let context = capture_context(&args).await.unwrap();
+        assert_eq!(
+            context.host_key_alias.as_deref(),
+            Some("[fe80::1%en0]:2222")
+        );
     }
 
     #[tokio::test]
@@ -978,16 +1025,12 @@ mod tests {
     }
 
     #[test]
-    fn effective_snapshot_preserves_paths_and_original_known_hosts_command() {
+    fn effective_snapshot_preserves_full_configuration() {
         let configuration = "host alias\nhostname actual.example\nport 2222\nhostkeyalias stable-alias\nknownhostscommand /bin/cat \"/a path/known\"\nuserknownhostsfile /a path/known /another\n";
         let context = parse_effective_config(configuration.into()).unwrap();
         assert_eq!(context.hostname, "actual.example");
         assert_eq!(context.port, 2222);
         assert_eq!(context.host_key_alias.as_deref(), Some("stable-alias"));
-        assert_eq!(
-            context.known_hosts_command.as_deref(),
-            Some("/bin/cat \"/a path/known\"")
-        );
         assert_eq!(context.configuration, configuration);
         let changed =
             parse_effective_config(configuration.replace("/another", "/changed")).unwrap();
@@ -1058,6 +1101,28 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let server_config = directory.file("sshd_config", format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nPidFile {}/pid\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nLogLevel ERROR\n{}", server_key.display(), directory.0.display(), if production_rsa { "HostKeyAlgorithms ssh-rsa\n" } else { "" }).as_bytes(), 0o600).unwrap();
+        // 新版 sshd 会累计无认证探针的来源惩罚，隔离测试需要关闭它；旧版不支持该选项。
+        let defaults = std::process::Command::new("/usr/sbin/sshd")
+            .args(["-T", "-f"])
+            .arg(&server_config)
+            .output()
+            .unwrap();
+        assert!(
+            defaults.status.success(),
+            "{}",
+            String::from_utf8_lossy(&defaults.stderr)
+        );
+        if String::from_utf8_lossy(&defaults.stdout)
+            .lines()
+            .any(|line| line.starts_with("persourcepenalties "))
+        {
+            OpenOptions::new()
+                .append(true)
+                .open(&server_config)
+                .unwrap()
+                .write_all(b"PerSourcePenalties no\n")
+                .unwrap();
+        }
         struct Server(std::process::Child);
         impl Drop for Server {
             fn drop(&mut self) {
@@ -1093,7 +1158,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let known_hosts = directory
-            .file("known hosts with spaces", b"", 0o600)
+            .file("known hosts %h with spaces", b"", 0o600)
             .unwrap();
         let initial_known_hosts = if production_rsa {
             format!(
@@ -1113,58 +1178,39 @@ mod tests {
                 0o700,
             )
             .unwrap();
-        let client_config = directory
-            .file(
-                "ssh_config",
-                format!(
-                    "Host *\n  UserKnownHostsFile \"{}\"\n  GlobalKnownHostsFile /dev/null\n{}",
-                    known_hosts.display(), if production_rsa { String::new() } else { format!("  KnownHostsCommand /bin/sh \"{}\" \"{}\" \"preserved argument;$(literal)\" %I %h %p %H %f\n", original_command.display(), command_calls.display()) }
-                )
-                .as_bytes(),
-                0o600,
-            )
+        let system_contents = format!(
+            "external-alias,[fixture.logical.invalid]:{port},[127.0.0.1]:{port} {}",
+            std::fs::read_to_string(server_key.with_extension("pub")).unwrap()
+        );
+        let system_known_hosts = directory
+            .file("system known hosts", system_contents.as_bytes(), 0o600)
             .unwrap();
-        let mut args = vec!["-F".into(), client_config.to_str().unwrap().into()];
-        if production_rsa {
-            let original_log = directory.file("original.log", b"", 0o600).unwrap();
-            args.extend([
-                "-o".into(),
-                "StrictHostKeyChecking=yes".into(),
-                "-E".into(),
-                original_log.to_str().unwrap().into(),
-                "-o".into(),
-                "LogLevel=DEBUG3".into(),
-                "-o".into(),
-                "FingerprintHash=sha256".into(),
-                "-vvv".into(),
-                "-tt".into(),
-                "-o".into(),
-                "HostKeyAlgorithms=+ssh-rsa".into(),
-                "-o".into(),
-                "ControlMaster=yes".into(),
-                "-o".into(),
-                "ControlPersist=no".into(),
-                "-o".into(),
-                format!("ControlPath={}/unused-control", directory.0.display()),
-                "-o".into(),
-                "ServerAliveInterval=30".into(),
-                "-o".into(),
-                "ServerAliveCountMax=3".into(),
-                "-o".into(),
-                "PreferredAuthentications=keyboard-interactive,password".into(),
-                "-o".into(),
-                "PubkeyAuthentication=no".into(),
-                "-o".into(),
-                "KbdInteractiveAuthentication=yes".into(),
-            ]);
-        }
-        args.extend([
-            "-p".into(),
-            port.to_string(),
-            "sshx-probe-invalid@127.0.0.1".into(),
-            "touch /tmp/sshx-should-never-execute".into(),
-        ]);
-        let lookup = format!("[127.0.0.1]:{port}");
+        let client_config = directory.file(
+            "ssh_config",
+            format!(
+                "Host *\n HostName 127.0.0.1\n HostKeyAlias external-alias\n UserKnownHostsFile \"{}\"\n GlobalKnownHostsFile \"{}\"\n KnownHostsCommand /bin/sh \"{}\" \"{}\" %I %h %p %H %f\n VerifyHostKeyDNS yes\n NoHostAuthenticationForLocalhost yes\n NoHostAuthenticationForProxyCommand yes\n CheckHostIP yes\n HashKnownHosts yes\n UpdateHostKeys yes\n",
+                system_known_hosts.display(), system_known_hosts.display(),
+                original_command.display(), command_calls.display()
+            ).as_bytes(), 0o600
+        ).unwrap();
+        let original_log = directory.file("original.log", b"", 0o600).unwrap();
+        let control_path = directory.0.join("unused-control");
+        let mut args = super::super::openssh::build_ssh_args(
+            "FIXTURE.LOGICAL.INVALID",
+            port,
+            "sshx-probe-invalid",
+            &crate::ssh::auth::AuthMethod::Password(String::new()),
+            30,
+            3,
+            original_log.to_str().unwrap(),
+            Some("touch /tmp/sshx-should-never-execute"),
+            Some(control_path.to_str().unwrap()),
+            "utf-8",
+            &known_hosts,
+        )
+        .unwrap();
+        args.splice(0..0, ["-F".into(), client_config.to_str().unwrap().into()]);
+        let lookup = format!("[fixture.logical.invalid]:{port}");
         let context = capture_context(&args).await.unwrap();
         let helper = directory
             .file("askpass", ASKPASS_SCRIPT.as_bytes(), 0o700)
@@ -1263,9 +1309,14 @@ mod tests {
             .lines()
             .any(|line| line == "debug1: SSH2_MSG_NEWKEYS received"));
         let calls = std::fs::read_to_string(&command_calls).unwrap();
-        if !production_rsa {
-            assert!(calls.contains("preserved argument;$(literal)\nHOSTNAME\n127.0.0.1\n"));
-        }
+        assert!(calls.is_empty(), "外部 KnownHostsCommand 不得执行");
+        assert_eq!(
+            std::fs::read_to_string(&system_known_hosts).unwrap(),
+            system_contents
+        );
+        assert!(saved
+            .lines()
+            .any(|line| line.starts_with(&format!("{lookup} "))));
 
         // 当前服务器密钥已经受原生 known_hosts 信任，错误的批准指纹仍须阻断握手。
         let wrong_pin = HostKeyPin::new(context.clone(), lookup.clone(), FP.into()).unwrap();
@@ -1305,19 +1356,46 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&known_hosts).unwrap(), saved);
         }
 
+        assert_eq!(
+            crate::ssh::known_hosts::clear_host_keys(&known_hosts, "FIXTURE.LOGICAL.INVALID", port)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(&known_hosts).unwrap(),
+            initial_known_hosts
+        );
+        let cleared_log = directory.file("cleared.log", b"", 0o600).unwrap();
+        let cleared_args = probe_arguments(&args, cleared_log.to_str().unwrap(), "yes").unwrap();
+        let cleared = run_probe(
+            &cleared_args,
+            &cleared_log,
+            &helper,
+            &directory.0.join("cleared-once"),
+            &lookup,
+            &actual.fingerprint,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            unknown_candidate(&cleared).unwrap(),
+            Some(Candidate {
+                algorithm: actual.algorithm.clone(),
+                fingerprint: actual.fingerprint.clone()
+            })
+        );
+        assert_eq!(
+            std::fs::read_to_string(&system_known_hosts).unwrap(),
+            system_contents
+        );
+
         let actual_public = std::fs::read_to_string(server_key.with_extension("pub")).unwrap();
         let changed_public = std::fs::read_to_string(changed_key.with_extension("pub")).unwrap();
         let rsa_public = std::fs::read_to_string(rsa_key.with_extension("pub")).unwrap();
         for (name, entry) in [
-            ("changed", format!("[127.0.0.1]:{port} {changed_public}")),
-            (
-                "revoked",
-                format!("@revoked [127.0.0.1]:{port} {actual_public}"),
-            ),
-            (
-                "other-algorithm",
-                format!("[127.0.0.1]:{port} {rsa_public}"),
-            ),
+            ("changed", format!("{lookup} {changed_public}")),
+            ("revoked", format!("@revoked {lookup} {actual_public}")),
+            ("other-algorithm", format!("{lookup} {rsa_public}")),
         ] {
             std::fs::write(&known_hosts, &entry).unwrap();
             let strict_log = directory
